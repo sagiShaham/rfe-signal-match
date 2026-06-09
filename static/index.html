@@ -1,0 +1,2307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RFE Signal Match</title>
+<style>
+:root{
+  --sidebar-bg:#0f172a;--sidebar-hover:#1e293b;--sidebar-active:#1d4ed8;
+  --accent:#3b82f6;--accent-dark:#1d4ed8;
+  --bg:#f1f5f9;--card:#ffffff;--border:#e2e8f0;
+  --text:#0f172a;--text-muted:#64748b;
+  --high:#ef4444;--high-bg:#fef2f2;
+  --med:#f59e0b;--med-bg:#fffbeb;
+  --low:#eab308;--low-bg:#fefce8;
+  --success:#22c55e;--success-bg:#f0fdf4;
+  --radius:10px;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06);
+  --shadow-md:0 4px 6px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden}
+
+/* Sidebar */
+#sidebar{width:220px;min-width:220px;background:var(--sidebar-bg);display:flex;flex-direction:column;padding:20px 12px;position:relative;z-index:100;flex-shrink:0}
+.sidebar-logo{color:#fff;font-size:15px;font-weight:700;padding:0 8px 24px;display:flex;align-items:center;gap:8px}
+.logo-icon{width:28px;height:28px;background:var(--accent);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:7px;cursor:pointer;color:#94a3b8;font-size:13.5px;font-weight:500;transition:all .15s;margin-bottom:2px;user-select:none;text-decoration:none}
+.nav-item:hover{background:var(--sidebar-hover);color:#e2e8f0}
+.nav-item.active{background:var(--sidebar-active);color:#fff}
+.nav-item svg{width:16px;height:16px;flex-shrink:0}
+.nav-badge{margin-left:auto;background:var(--high);color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:1px 6px;min-width:18px;text-align:center}
+.nav-sep{border-top:1px solid #1e293b;margin:10px 0}
+.sidebar-footer{margin-top:auto;padding:8px;color:#475569;font-size:11px;text-align:center}
+
+/* Main */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#topbar{background:var(--card);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+#page-title{font-size:17px;font-weight:700;flex:1}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:7px;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-dark)}
+.btn-ghost{background:transparent;color:var(--text-muted);border:1px solid var(--border)}.btn-ghost:hover{background:var(--bg)}
+.btn-success{background:var(--success);color:#fff}.btn-success:hover{background:#16a34a}
+.btn-danger{background:var(--high);color:#fff}.btn-danger:hover{background:#dc2626}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* Content */
+#content{flex:1;overflow-y:auto;overflow-x:hidden;padding:0 28px 100px}
+.page{display:none}.page.active{display:block}
+.section-header{display:flex;align-items:center;justify-content:space-between;margin:20px 0 14px}
+.section-header h2{font-size:15px;font-weight:700}
+
+/* Source cards grid */
+.source-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px}
+.source-card{background:var(--card);border-radius:var(--radius);border:2px dashed var(--border);padding:20px;text-align:center;transition:all .2s;cursor:pointer;position:relative}
+.source-card:hover{border-color:var(--accent);background:#f8fbff}
+.source-card.has-data{border-style:solid;border-color:var(--success)}
+.source-card.disabled{opacity:.5;cursor:not-allowed;pointer-events:none}
+.source-icon{font-size:28px;margin-bottom:8px}
+.source-title{font-size:13px;font-weight:700;margin-bottom:4px}
+.source-desc{font-size:11px;color:var(--text-muted);margin-bottom:12px}
+.source-status{font-size:11px;font-weight:600;margin-top:8px}
+.source-status.loaded{color:var(--success)}
+.source-status.empty{color:var(--text-muted)}
+input[type=file]{display:none}
+
+/* ADO radio */
+.ado-sub-select{display:flex;gap:8px;margin-top:8px;justify-content:center}
+.ado-sub-select label{font-size:11px;cursor:pointer;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg)}
+.ado-sub-select input:checked+span{color:var(--accent);font-weight:700}
+
+/* Docs list */
+.docs-list{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;box-shadow:var(--shadow)}
+.doc-row{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px}
+.doc-row:last-child{border-bottom:none}
+.doc-type-badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap}
+.badge-release_notes{background:#f0fdf4;color:#15803d}
+.badge-ado_current_pi{background:#eff6ff;color:#1d4ed8}
+.badge-ado_backlog{background:#f0f9ff;color:#0369a1}
+.badge-roadmap{background:#fef3c7;color:#92400e}
+.badge-confluence{background:#fdf4ff;color:#7e22ce}
+.badge-backlog{background:#eff6ff;color:#1d4ed8}
+.doc-title{flex:1;font-weight:600}
+.doc-meta{font-size:11px;color:var(--text-muted)}
+
+/* Confluence */
+.cf-form{display:flex;gap:8px;margin-top:8px}
+.cf-input{flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:7px;font-size:13px;outline:none}
+.cf-input:focus{border-color:var(--accent)}
+
+/* Drop zone */
+.drop-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:32px;text-align:center;cursor:pointer;transition:all .2s;background:var(--card)}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--accent);background:#f0f9ff}
+.drop-zone-icon{font-size:36px;margin-bottom:10px}
+.drop-zone-label{font-size:14px;font-weight:600;margin-bottom:4px}
+.drop-zone-sub{font-size:12px;color:var(--text-muted)}
+
+/* Progress */
+.progress-wrap{background:var(--border);border-radius:4px;height:6px;margin:6px 0;overflow:hidden}
+.progress-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .3s}
+
+/* ─── Signal Match table ─── */
+.signal-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.filter-btn{padding:5px 12px;border-radius:20px;border:1px solid var(--border);background:var(--card);font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);transition:all .15s}
+.filter-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.filter-btn:hover:not(.active){background:var(--bg)}
+.search-input{padding:7px 12px;border-radius:7px;border:1px solid var(--border);font-size:13px;outline:none;background:var(--card);width:220px}
+.search-input:focus{border-color:var(--accent)}
+.group-toggle{display:flex;background:var(--bg);border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.group-toggle-btn{padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);border:none;background:transparent;transition:all .15s}
+.group-toggle-btn.active{background:var(--accent);color:#fff}
+
+.signal-table-wrap{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow);overflow:hidden}
+.signal-group-header{background:#f8fafc;padding:8px 16px;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.signal-row{display:grid;grid-template-columns:100px 1fr 160px 90px 75px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;gap:8px}
+.copy-case{font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 6px;cursor:pointer;color:var(--accent);white-space:nowrap;transition:background .1s}
+.copy-case:hover{background:#dbeafe}
+.signal-row:hover{background:#f8fbff}
+.signal-row.expanded{background:#f0f9ff}
+.signal-row:last-child:not(.why-row){border-bottom:none}
+.sig-title{font-size:13px;font-weight:600}
+.sig-accounts{font-size:12px;color:var(--text-muted)}
+.sig-arr{font-size:13px;font-weight:600;color:var(--text)}
+.sig-domain{font-size:11px;color:var(--text-muted);background:var(--bg);padding:2px 7px;border-radius:10px;text-align:center}
+
+/* Score tooltip — JS-driven (see #score-tooltip-el below) */
+.score-tip{cursor:help;}
+
+/* Confidence chip */
+.chip{display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:700}
+.chip-high{background:var(--high-bg);color:var(--high)}
+.chip-medium{background:var(--med-bg);color:var(--med)}
+.chip-low{background:var(--low-bg);color:var(--low)}
+
+/* Status chip */
+.status-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.status-delivered{background:#dcfce7;color:#15803d}
+.status-in_current_pi{background:#dbeafe;color:#1d4ed8}
+.status-planned{background:#fef3c7;color:#92400e}
+.status-no_match{background:#f1f5f9;color:#64748b}
+
+/* Why panel (inline row) */
+.why-row{border-bottom:1px solid var(--border);background:#fafbff}
+.why-panel{padding:14px 20px 16px 20px}
+.why-section{margin-bottom:10px}
+.why-label{font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.why-terms{display:flex;flex-wrap:wrap;gap:5px}
+.term-chip{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px;color:var(--text-muted);font-family:monospace}
+.why-breakdown{display:flex;flex-direction:column;gap:4px}
+.breakdown-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.breakdown-label{color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.breakdown-bar-wrap{width:100px;background:var(--border);border-radius:3px;height:5px;flex-shrink:0}
+.breakdown-bar{height:100%;border-radius:3px;background:var(--accent)}
+.breakdown-val{color:var(--accent);font-weight:700;font-size:11px;min-width:30px;text-align:right}
+.why-members{font-size:12px;color:var(--text-muted)}
+.why-members strong{color:var(--text)}
+
+/* Email side drawer */
+#email-drawer{position:fixed;top:0;right:-480px;width:460px;height:100vh;background:var(--card);border-left:1px solid var(--border);box-shadow:-8px 0 40px rgba(0,0,0,.15);z-index:800;transition:right .3s ease;display:flex;flex-direction:column}
+#email-drawer.open{right:0}
+.drawer-header{padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0}
+.drawer-title{font-size:15px;font-weight:700;flex:1}
+.drawer-body{flex:1;overflow-y:auto;padding:16px 20px}
+.drawer-footer{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0}
+.email-field{margin-bottom:14px}
+.email-field label{display:block;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.email-field .val{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;font-size:13px;width:100%;white-space:pre-wrap;line-height:1.6;min-height:40px}
+.email-textarea{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;font-size:13px;width:100%;line-height:1.6;min-height:140px;resize:vertical;outline:none;font-family:inherit}
+.email-textarea:focus{border-color:var(--accent)}
+
+/* Scoring Config */
+.config-section{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow);padding:22px 24px;margin-bottom:16px}
+.config-section h3{font-size:14px;font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.weight-row{display:flex;align-items:center;gap:16px;margin-bottom:14px}
+.weight-label{min-width:200px;flex-shrink:0}
+.weight-name{font-size:13px;font-weight:600}
+.weight-desc{font-size:11px;color:var(--text-muted)}
+.weight-control{flex:1;display:flex;align-items:center;gap:10px}
+.weight-control input[type=range]{flex:1;accent-color:var(--accent)}
+.weight-val{min-width:34px;text-align:right;font-size:14px;font-weight:700;color:var(--accent)}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)}
+.toggle-row:last-child{border-bottom:none}
+.toggle-info .toggle-name{font-size:13px;font-weight:600}
+.toggle-info .toggle-desc{font-size:11px;color:var(--text-muted);margin-top:2px}
+.toggle-switch{position:relative;width:40px;height:22px;flex-shrink:0}
+.toggle-switch input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:#cbd5e1;border-radius:22px;transition:.3s}
+.toggle-slider:before{content:'';position:absolute;height:16px;width:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
+input:checked+.toggle-slider{background:var(--accent)}
+input:checked+.toggle-slider:before{transform:translateX(18px)}
+
+/* Threshold sliders */
+.threshold-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:12px}
+.threshold-card{padding:14px;background:var(--bg);border-radius:8px;border:1px solid var(--border)}
+.threshold-name{font-size:12px;font-weight:700;margin-bottom:2px}
+.threshold-desc{font-size:11px;color:var(--text-muted);margin-bottom:8px}
+.threshold-val{font-size:22px;font-weight:800;color:var(--accent)}
+
+/* Confluence page tree */
+.page-tree{max-height:320px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px}
+.tree-node{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;cursor:pointer;transition:background .1s}
+.tree-node:hover{background:var(--card)}
+.tree-node input[type=checkbox]{accent-color:var(--accent);width:14px;height:14px}
+.tree-node-title{font-size:12.5px;flex:1}
+.tree-children{margin-left:20px}
+
+/* Stats bar */
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+.stat-card{background:var(--card);border-radius:var(--radius);padding:12px 16px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.stat-label{font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+.stat-value{font-size:22px;font-weight:800;margin-top:3px}
+.stat-sub{font-size:10px;color:var(--text-muted);margin-top:2px}
+
+/* Empty state */
+.empty-state{text-align:center;padding:60px 24px;color:var(--text-muted)}
+.empty-state .big-icon{font-size:52px;margin-bottom:16px}
+.empty-state h3{font-size:18px;font-weight:700;color:var(--text);margin-bottom:8px}
+.empty-state p{font-size:14px;margin-bottom:24px;max-width:380px;margin-left:auto;margin-right:auto}
+
+/* Toast */
+#toast-container{position:fixed;bottom:24px;right:24px;z-index:2100;display:flex;flex-direction:column;gap:8px}
+.toast{background:#1e293b;color:#f1f5f9;padding:12px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.2);max-width:340px;animation:slideIn .2s ease;display:flex;align-items:center;gap:8px}
+.toast.success{background:#14532d}.toast.error{background:#7f1d1d}
+@keyframes slideIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+
+/* Scoring mode badge */
+.mode-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd}
+
+/* Info box */
+.info-box{background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 16px;font-size:12.5px;color:#0369a1;margin-bottom:16px}
+</style>
+<script>
+// ── Interaction helpers — in <head> so server-rendered HTML works immediately ──
+
+// HTML-escape helper (mirrors JS esc() in body)
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Get allClusters: prefer live variable (if body script ran), fall back to server-injected data
+function _getClusters() {
+  try { if (typeof allClusters !== 'undefined' && allClusters.length) return allClusters; } catch(e) {}
+  return (typeof window.__INITIAL_CLUSTERS__ !== 'undefined') ? window.__INITIAL_CLUSTERS__ : [];
+}
+
+// Safe toast — works even if body script hasn't run
+function _toast(msg, type) {
+  try { toast(msg, type || 'info'); } catch(e) { console.log('[toast]', msg); }
+}
+
+// Shared drawer cluster-id tracker
+var drawerClusterId = null;
+
+// ── Email drawer ──────────────────────────────────────────────────────────────
+function _emailStatusBadge(ms) {
+  return ({
+    delivered:     '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">✅ Delivered</span>',
+    in_current_pi: '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">🏃 In Current PI</span>',
+    planned:       '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">🗓 Planned</span>',
+    no_match:      '<span style="background:#f1f5f9;color:#64748b;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">— No Match</span>',
+  })[ms] || '';
+}
+
+function openEmailDrawer(clusterId, accountName) {
+  drawerClusterId = clusterId;
+  var drawer = document.getElementById('email-drawer');
+  if (drawer) drawer.classList.add('open');
+
+  var clusters = _getClusters();
+  var cluster  = clusters.find(function(c) { return c.id === clusterId; });
+  var members  = (cluster && cluster.members) ? cluster.members : [];
+
+  // Filter to the chosen account
+  var acctMembers = accountName
+    ? members.filter(function(m) { return m.account_name === accountName; })
+    : members;
+
+  var _slabels = {delivered:'✅ Delivered', in_current_pi:'🏃 In PI', planned:'🗓 Planned', no_match:'📝 No Match'};
+  var _spinner = '<div style="color:var(--text-muted);text-align:center;padding:30px">' +
+    '<span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>' +
+    '<br><br>Generating email…</div>';
+
+  var bodyEl = document.getElementById('email-drawer-body');
+  if (!bodyEl) return;
+
+  if (acctMembers.length > 1) {
+    // Multiple RFEs for this account → show RFE picker dropdown
+    var opts = acctMembers.map(function(m) {
+      var sl   = _slabels[m.match_status] || '📝 No Match';
+      var subj = (m.subject || '').slice(0, 50);
+      return '<option value="' + m.id + '">[' + (m.case_number||'—') + '] ' + esc(subj) + ' — ' + sl + '</option>';
+    }).join('');
+    bodyEl.innerHTML =
+      '<div style="margin-bottom:14px">' +
+      '<label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);display:block;margin-bottom:5px">Select RFE</label>' +
+      '<select id="email-rfe-sel" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--card);color:var(--text)">' +
+      opts + '</select></div>' +
+      '<div id="email-content-area">' + _spinner + '</div>';
+    var sel = document.getElementById('email-rfe-sel');
+    if (sel) {
+      sel.onchange = function() { _renderEmailContent(clusterId, parseInt(this.value)); };
+    }
+    _renderEmailContent(clusterId, acctMembers[0].id);
+  } else {
+    // Single RFE → generate immediately
+    bodyEl.innerHTML = '<div id="email-content-area">' + _spinner + '</div>';
+    _renderEmailContent(clusterId, acctMembers[0] ? acctMembers[0].id : null);
+  }
+}
+
+async function _renderEmailContent(clusterId, memberId) {
+  var area = document.getElementById('email-content-area');
+  if (!area) return;
+  area.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:30px">' +
+    '<span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>' +
+    '<br><br>Generating email…</div>';
+  try {
+    var payload = {cluster_id: clusterId};
+    if (memberId) payload.member_id = memberId;
+    var res = await fetch('/api/preview-email', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    var email = await res.json();
+    var clusters = _getClusters();
+    var cluster  = clusters.find(function(c) { return c.id === clusterId; });
+    var ms = email.effective_status || (cluster && cluster.match_status) || 'no_match';
+    area.innerHTML =
+      '<div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">' +
+      '<strong style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+      esc(email.rfe_subject || (cluster && cluster.cluster_title) || 'Cluster') + '</strong>' +
+      _emailStatusBadge(ms) + '</div>' +
+      '<div class="email-field"><label>To</label><div class="val" id="email-to">' + esc(email.to||'—') + '</div></div>' +
+      '<div class="email-field"><label>Subject</label><div class="val" id="email-subject">' + esc(email.subject||'—') + '</div></div>' +
+      '<div class="email-field"><label>Body</label><textarea class="email-textarea" id="email-body">' + esc(email.body||'—') + '</textarea></div>' +
+      (email._template
+        ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">⚡ Template email · add ANTHROPIC_API_KEY for AI-generated emails</div>'
+        : '<div style="font-size:11px;color:var(--success)">🤖 Generated by Claude AI</div>');
+  } catch(e) {
+    if (area) area.innerHTML = '<div style="color:var(--high);padding:16px">❌ ' + esc(e.message) + '</div>';
+    _toast('Preview failed: ' + e.message, 'error');
+  }
+}
+
+function closeEmailDrawer() {
+  var drawer = document.getElementById('email-drawer');
+  if (drawer) drawer.classList.remove('open');
+  drawerClusterId = null;
+}
+
+function copyEmailToClipboard() {
+  var to   = (document.getElementById('email-to')?.textContent   || '');
+  var subj = (document.getElementById('email-subject')?.textContent || '');
+  var body = (document.getElementById('email-body')?.value        || '');
+  var text = 'To: ' + to + '\nSubject: ' + subj + '\n\n' + body;
+  navigator.clipboard.writeText(text)
+    .then(function()  { _toast('Email copied to clipboard ✅', 'success'); })
+    .catch(function() { _toast('Copy failed — try manual select', 'error'); });
+}
+
+// ── Expand/collapse a cluster row ─────────────────────────────────────────────
+function toggleExpand(id) {
+  var el  = document.getElementById('expand-' + id);
+  var row = document.getElementById('row-' + id);
+  if (!el) return;
+  var isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : '';
+  if (row) row.classList.toggle('expanded', !isOpen);
+}
+
+// ── Copy case/epic IDs to clipboard ──────────────────────────────────────────
+function copyCase(el, caseId) {
+  navigator.clipboard.writeText(caseId).then(function() {
+    var orig = el.textContent;
+    el.textContent = 'Copied ✓'; el.style.background = '#dcfce7'; el.style.color = '#15803d';
+    setTimeout(function() { el.textContent = orig; el.style.background = ''; el.style.color = ''; }, 2000);
+  }).catch(function() {});
+}
+function copyMatchedId(el, text) {
+  navigator.clipboard.writeText(text).then(function() {
+    var orig = el.textContent;
+    el.textContent = 'Copied ✓'; el.style.color = '#15803d'; el.style.fontWeight = '700';
+    setTimeout(function() { el.textContent = orig; el.style.color = ''; el.style.fontWeight = ''; }, 1800);
+  }).catch(function() {});
+}
+
+// ── Navigation — defined in <head> so it's ALWAYS available before body renders ──
+function _nav(page) {
+  var pages = ['sources','signal','scoring'];
+  for (var i=0; i<pages.length; i++) {
+    var el = document.getElementById('page-'+pages[i]);
+    if (el) el.style.display = (pages[i]===page) ? 'block' : 'none';
+    var nav = document.querySelector('[data-page="'+pages[i]+'"]');
+    if (nav) { nav.classList.toggle('active', pages[i]===page); }
+  }
+  var titles = {sources:'Data Sources', signal:'Signal Match', scoring:'Scoring Config'};
+  var titleEl = document.getElementById('page-title');
+  if (titleEl) titleEl.textContent = titles[page] || page;
+  if (page==='signal') {
+    try {
+      // If clusters already preloaded, render immediately; then refresh in background
+      if (typeof allClusters !== 'undefined' && allClusters.length > 0) {
+        renderSignalTable(); updateBadge();
+      }
+      loadClusters(); // always fetch fresh data (and render on complete)
+    } catch(e) {}
+    try { loadStats(); } catch(e) {}
+  }
+  if (page==='sources') { try{loadDocs();}catch(e){} }
+  if (page==='scoring') { try{loadScoringConfig();}catch(e){} }
+}
+// Keep navigate() as alias for legacy calls in JS body
+function navigate(page) { _nav(page); }
+</script>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">📡</div>
+    RFE Signal Match
+  </div>
+
+  <a class="nav-item active" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    Data Sources
+    <span class="nav-badge" id="badge-sources" style="display:none"></span>
+  </a>
+
+  <div class="nav-sep"></div>
+
+  <a class="nav-item" data-page="signal" href="#signal" onclick="event.preventDefault();_nav('signal')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    Signal Match
+    <span class="nav-badge" id="badge-signal" style="display:none">0</span>
+  </a>
+
+  <a class="nav-item" data-page="scoring" href="#scoring" onclick="event.preventDefault();_nav('scoring')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M2 12h2M20 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
+    Scoring Config
+  </a>
+
+  <div class="sidebar-footer">v2.0 · Cynet PM Tools</div>
+</nav>
+
+<!-- Main -->
+<div id="main">
+  <div id="topbar">
+    <span id="page-title">Data Sources</span>
+  </div>
+  <div id="content">
+
+    <!-- ══════════════════════════════════════════════
+         PAGE: Data Sources
+    ══════════════════════════════════════════════════ -->
+    <div class="page active" id="page-sources">
+      <div class="section-header" style="margin-top:20px">
+        <h2>Import your data</h2>
+        <span style="font-size:12px;color:var(--text-muted)">Upload RFEs + context sources for signal matching</span>
+      </div>
+
+      <!-- CSV Drop Zone -->
+      <div style="margin-bottom:24px">
+        <div class="drop-zone" id="csv-drop-zone"
+             onclick="document.getElementById('csv-file-input').click()"
+             ondragover="event.preventDefault();this.classList.add('dragover')"
+             ondragleave="this.classList.remove('dragover')"
+             ondrop="handleCsvDrop(event)">
+          <div class="drop-zone-icon">📊</div>
+          <div class="drop-zone-label">Drop your Salesforce Cases CSV here</div>
+          <div class="drop-zone-sub">or click to browse · Supports any SF Cases export</div>
+          <div id="csv-upload-status" style="margin-top:10px;font-size:13px"></div>
+          <div id="csv-inline-progress" style="display:none;margin-top:14px;width:100%;max-width:500px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:5px">
+              <span id="csv-inline-label">Processing…</span>
+              <span id="csv-inline-pct" style="color:var(--accent)">0%</span>
+            </div>
+            <div style="background:#e2e8f0;border-radius:6px;height:8px;overflow:hidden">
+              <div id="csv-inline-bar" style="height:100%;background:var(--accent);border-radius:6px;width:0%;transition:width .4s"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:5px" id="csv-inline-sub">Comparing RFEs within each product domain…</div>
+          </div>
+        </div>
+        <input type="file" id="csv-file-input" accept=".csv" onchange="handleCsvFile(this.files[0])"/>
+      </div>
+
+      <!-- Context sources grid -->
+      <div class="section-header">
+        <h2>Context sources <span style="font-size:12px;font-weight:400;color:var(--text-muted)">(optional — powers Status matching)</span></h2>
+      </div>
+      <div class="source-grid">
+
+        <!-- Release Notes -->
+        <div class="source-card" id="card-release_notes" onclick="document.getElementById('rn-file-input').click()">
+          <div class="source-icon">📋</div>
+          <div class="source-title">Release Notes</div>
+          <div class="source-desc">Upload .txt, .md, or .docx — marks matched RFEs as <strong>Delivered</strong></div>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();document.getElementById('rn-file-input').click()">Browse file</button>
+          <div class="source-status empty" id="status-release_notes">Not loaded</div>
+        </div>
+        <input type="file" id="rn-file-input" accept=".txt,.md,.docx" onchange="uploadReleaseNotes(this.files[0]);this.value=''"/>
+
+        <!-- ADO Epics (unified) -->
+        <div class="source-card" id="card-ado" style="cursor:default" onclick="event.stopPropagation()">
+          <div class="source-icon">🏃</div>
+          <div class="source-title">ADO Epics</div>
+          <div class="source-desc">Current PI and upcoming PI — upload one CSV per PI</div>
+          <div style="display:flex;gap:6px;margin-top:4px;justify-content:center">
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('ado-pi-input').click()">📥 Current PI</button>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('ado-bl-input').click()">📥 Upcoming PI</button>
+          </div>
+          <div class="source-status empty" id="status-ado">Not loaded</div>
+        </div>
+        <input type="file" id="ado-pi-input" accept=".csv" onchange="uploadAdoCsv(this.files[0],'ado_current_pi');this.value=''"/>
+        <input type="file" id="ado-bl-input" accept=".csv" onchange="uploadAdoCsv(this.files[0],'ado_backlog');this.value=''"/>
+
+        <!-- Roadmap PPTX/PDF -->
+        <div class="source-card" id="card-roadmap" onclick="document.getElementById('rm-file-input').click()">
+          <div class="source-icon">🗺️</div>
+          <div class="source-title">Roadmap</div>
+          <div class="source-desc">Upload .pptx or .pdf roadmap — marks matched RFEs as <strong>Planned</strong></div>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();document.getElementById('rm-file-input').click()">Browse file</button>
+          <div class="source-status empty" id="status-roadmap">Not loaded</div>
+        </div>
+        <input type="file" id="rm-file-input" accept=".pptx,.pdf,.ppt" onchange="uploadRoadmap(this.files[0]);this.value=''"/>
+
+        <!-- Confluence -->
+        <div class="source-card" id="card-confluence" style="cursor:default" onclick="event.stopPropagation()">
+          <div class="source-icon">📝</div>
+          <div class="source-title">Confluence</div>
+          <div class="source-desc">Browse spaces & select pages to import</div>
+          <div id="cf-connect-area">
+            <button class="btn btn-primary btn-sm" id="btn-cf-connect" onclick="connectConfluence()">🔗 Connect & Browse</button>
+          </div>
+          <div id="cf-spaces-area" style="display:none;width:100%;margin-top:8px">
+            <select id="cf-space-select" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:7px;font-size:12px;margin-bottom:6px">
+              <option value="">Select a space…</option>
+            </select>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-primary btn-sm" style="flex:1" onclick="loadPageTree()">🌳 Browse pages</button>
+              <button class="btn btn-ghost btn-sm" style="flex:1" onclick="importConfluenceSpaceAll()">📥 Import all</button>
+            </div>
+          </div>
+          <div id="cf-tree-area" style="display:none;margin-top:8px;width:100%;text-align:left">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <span style="font-size:11px;font-weight:700;color:var(--text-muted)" id="cf-tree-count"></span>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-ghost" style="font-size:11px;padding:3px 7px" onclick="selectAllPages(true)">All</button>
+                <button class="btn btn-ghost" style="font-size:11px;padding:3px 7px" onclick="selectAllPages(false)">None</button>
+              </div>
+            </div>
+            <div class="page-tree" id="page-tree"></div>
+            <button class="btn btn-primary btn-sm" style="width:100%;margin-top:8px" onclick="importSelectedPages()">📥 Import selected</button>
+          </div>
+          <div id="cf-import-progress" style="display:none;margin-top:8px">
+            <div class="progress-wrap"><div class="progress-fill" id="cf-progress-bar" style="width:30%;animation:indeterminate 1.5s infinite"></div></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:3px" id="cf-progress-label">Importing…</div>
+          </div>
+          <div class="source-status empty" id="status-confluence">Not connected</div>
+        </div>
+
+        <!-- SF Direct (Phase 2) -->
+        <div class="source-card disabled">
+          <div class="source-icon">☁️</div>
+          <div class="source-title">Salesforce API <span style="font-size:10px;background:#f1f5f9;padding:1px 5px;border-radius:8px;color:var(--text-muted)">Phase 2</span></div>
+          <div class="source-desc">Live SF integration — no CSV export needed</div>
+          <button class="btn btn-ghost btn-sm" disabled>Coming soon</button>
+          <div class="source-status empty">Phase 2</div>
+        </div>
+      </div>
+
+      <!-- Loaded docs -->
+      <div id="docs-section" style="display:none">
+        <div class="section-header"><h2>Loaded context documents</h2>
+          <button class="btn btn-ghost" style="font-size:12px" onclick="loadDocs()">↺ Refresh</button>
+        </div>
+        <div class="docs-list" id="docs-list"></div>
+      </div>
+    </div><!-- /page-sources -->
+
+
+    <!-- ══════════════════════════════════════════════
+         PAGE: Signal Match
+    ══════════════════════════════════════════════════ -->
+    <div class="page" id="page-signal">
+
+      <!-- Stats -->
+      <div class="stats-row" id="signal-stats" style="margin-top:20px">
+        <div class="stat-card">
+          <div class="stat-label">Matched Clusters</div>
+          <div style="display:flex;align-items:baseline;gap:6px;margin-top:3px">
+            <div class="stat-value" id="stat-total">—</div>
+            <div style="font-size:12px;color:var(--text-muted);font-weight:600">clusters</div>
+          </div>
+          <div style="margin-top:4px;display:flex;align-items:baseline;gap:4px">
+            <span style="font-size:17px;font-weight:800;color:var(--accent)" id="stat-matched-rfes">—</span>
+            <span style="font-size:11px;color:var(--text-muted);font-weight:600">RFEs in clusters</span>
+          </div>
+          <div style="margin-top:3px;display:flex;align-items:baseline;gap:4px;border-top:1px solid var(--border);padding-top:4px">
+            <span style="font-size:12px;font-weight:700;color:var(--text-muted)" id="stat-rfe-big">—</span>
+            <span style="font-size:10px;color:var(--text-muted)">total in CSV</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">High Confidence</div>
+          <div class="stat-value" style="color:var(--high)" id="stat-high">—</div>
+          <div class="stat-sub">≥ threshold</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label" style="color:#15803d">✅ Delivered</div>
+          <div class="stat-value" style="color:#15803d" id="stat-delivered">—</div>
+          <div class="stat-sub">already shipped</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label" style="color:#1d4ed8">🏃 In Current PI</div>
+          <div class="stat-value" style="color:#1d4ed8" id="stat-in-pi">—</div>
+          <div class="stat-sub">being built now</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">💰 ARR at Stake</div>
+          <div class="stat-value" style="color:var(--accent)" id="stat-arr">—</div>
+          <div class="stat-sub">across matched clusters</div>
+        </div>
+      </div>
+
+      <!-- Quiet one-line toolbar -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <div class="group-toggle">
+          <button class="group-toggle-btn active" id="grp-domain" onclick="setGroupBy('domain',this)">By Domain</button>
+          <button class="group-toggle-btn" id="grp-customer" onclick="setGroupBy('customer',this)">By Customer</button>
+        </div>
+        <span style="color:var(--border)">|</span>
+        <button class="filter-btn active" id="filter-all" onclick="setFilter('all',this)">All</button>
+        <button class="filter-btn" id="filter-conf-high" onclick="setConfFilter('high',this)">🟢 High</button>
+        <button class="filter-btn" id="filter-conf-med" onclick="setConfFilter('medium',this)">🟡 Medium</button>
+        <button class="filter-btn" id="filter-conf-low" onclick="setConfFilter('low',this)">🔴 Low</button>
+        <span style="color:var(--border)">|</span>
+        <button class="filter-btn" id="filter-delivered" onclick="setStatusFilter('delivered',this)">Delivered</button>
+        <button class="filter-btn" id="filter-pi" onclick="setStatusFilter('in_current_pi',this)">In PI</button>
+        <button class="filter-btn" id="filter-planned" onclick="setStatusFilter('planned',this)">Planned</button>
+        <span style="color:var(--border)">|</span>
+        <select id="domain-filter" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)" onchange="renderSignalTable()">
+          <option value="">All Domains</option>
+        </select>
+        <select id="sort-by" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)" onchange="renderSignalTable()">
+          <option value="confidence">Confidence ↓</option>
+          <option value="arr">ARR ↓</option>
+          <option value="date">Recency ↓</option>
+        </select>
+        <input class="search-input" id="signal-search" placeholder="Search title, account, case #…" oninput="renderSignalTable()" style="max-width:200px"/>
+        <button class="btn btn-primary btn-sm" id="btn-rescore" style="margin-left:auto" onclick="rescoreRun()">⚡ Re-score</button>
+      </div>
+
+      <!-- Filtered-out counter -->
+      <div id="filtered-counter" style="display:none;font-size:12px;color:var(--text-muted);margin-bottom:10px;padding:6px 12px;background:var(--card);border:1px solid var(--border);border-radius:7px;width:fit-content"></div>
+
+      <!-- Scoring progress panel -->
+      <div id="scoring-progress-panel" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;margin-bottom:16px;box-shadow:var(--shadow)">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">
+          <div style="width:40px;height:40px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">⚡</div>
+          <div>
+            <div style="font-size:15px;font-weight:700;margin-bottom:2px">Scoring in progress…</div>
+            <div style="font-size:12px;color:var(--text-muted)">Cross-referencing RFEs against your context sources</div>
+          </div>
+        </div>
+
+        <!-- Step indicators -->
+        <div style="display:flex;gap:0;margin-bottom:20px">
+          <div id="sp-step1" style="flex:1;padding:10px 14px;border-radius:7px 0 0 7px;border:1px solid var(--border);background:var(--bg);transition:all .3s">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:3px">Pass 1</div>
+            <div style="font-size:12px;font-weight:600">Keyword pre-filter</div>
+          </div>
+          <div id="sp-step2" style="flex:1;padding:10px 14px;border-radius:0 7px 7px 0;border:1px solid var(--border);border-left:none;background:var(--bg);transition:all .3s">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:3px">Pass 2</div>
+            <div style="font-size:12px;font-weight:600">Semantic scoring</div>
+          </div>
+        </div>
+
+        <!-- Progress bar -->
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px">
+            <span id="sp-label" style="color:var(--text-muted)">Starting…</span>
+            <span id="sp-pct" style="color:var(--accent)">0%</span>
+          </div>
+          <div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">
+            <div id="sp-bar" style="height:100%;background:linear-gradient(90deg,var(--accent),#6366f1);border-radius:6px;width:0%;transition:width .5s ease"></div>
+          </div>
+          <div id="sp-eta" style="font-size:11px;color:var(--text-muted);margin-top:5px;text-align:right"></div>
+        </div>
+      </div>
+
+      <div id="signal-table-container"></div>
+    </div><!-- /page-signal -->
+
+
+    <!-- ══════════════════════════════════════════════
+         PAGE: Scoring Config
+    ══════════════════════════════════════════════════ -->
+    <div class="page" id="page-scoring">
+      <div class="section-header" style="margin-top:20px">
+        <h2>Scoring Configuration</h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="resetScoringConfig()">↺ Reset to defaults</button>
+          <button class="btn btn-primary btn-sm" onclick="saveScoringConfig()">💾 Save</button>
+        </div>
+      </div>
+
+      <!-- Scoring model explanation -->
+      <div class="config-section">
+        <h3>🧮 How Scoring Works</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="background:var(--bg);border-radius:8px;padding:14px;font-size:12.5px;line-height:1.7">
+            <strong>1. Similarity per source</strong><br>Each context document is compared against the RFE text using semantic similarity (0.0–1.0 raw score).
+          </div>
+          <div style="background:var(--bg);border-radius:8px;padding:14px;font-size:12.5px;line-height:1.7">
+            <strong>2. Weight multiplier</strong><br>Raw score × source weight = weighted signal. A Release Notes match at 0.5 similarity → 0.5 signal. A Confluence page at 0.5 → 0.15 signal.
+          </div>
+          <div style="background:var(--bg);border-radius:8px;padding:14px;font-size:12.5px;line-height:1.7">
+            <strong>3. Recency decay</strong><br>Sources older than 12 months have their weight reduced by 20%. A 13-month-old doc is still relevant — just slightly discounted.
+          </div>
+          <div style="background:var(--bg);border-radius:8px;padding:14px;font-size:12.5px;line-height:1.7">
+            <strong>4. Strongest signal wins</strong><br>The system takes the <strong>max signal</strong> across all sources — not an average. One strong Release Notes hit dominates over many weak Confluence matches.
+          </div>
+        </div>
+        <div style="margin-top:12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px 14px;font-size:12px;color:#78350f">
+          <strong>Status vs Confidence are separate dimensions.</strong>
+          Confidence (High/Medium/Low) reflects how strongly the sources match the RFE text.
+          Status (Delivered/In PI/Planned/No Match) is determined by <em>which</em> source triggered the match — not how strong the match was.
+        </div>
+      </div>
+
+      <!-- Source weights -->
+      <div class="config-section">
+        <h3>📊 Source Weights</h3>
+        <div class="info-box">Higher weight = stronger signal. When multiple sources match, the highest-priority source wins: Release Notes → ADO Current PI → ADO Upcoming PI → Roadmap → Confluence.</div>
+        <div id="weight-rows"></div>
+      </div>
+
+      <!-- Recency decay -->
+      <div class="config-section">
+        <h3>⏱ Recency Decay</h3>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <div class="toggle-name">Apply 20% weight reduction for sources older than 12 months</div>
+            <div class="toggle-desc">Context documents imported more than a year ago carry less signal weight</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-recency" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Thresholds -->
+      <div class="config-section">
+        <h3>🎚 Similarity Thresholds</h3>
+        <div class="threshold-grid">
+          <div class="threshold-card">
+            <div class="threshold-name">🔴 High Confidence</div>
+            <div class="threshold-desc">Clusters above this score are marked High</div>
+            <div class="threshold-val" id="val-high-conf">0.75</div>
+            <input type="range" min="0.5" max="1.0" step="0.05" id="slider-high-conf" style="width:100%;accent-color:var(--high);margin-top:8px"
+              oninput="document.getElementById('val-high-conf').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.5</span><span>1.0</span></div>
+          </div>
+          <div class="threshold-card">
+            <div class="threshold-name">🟡 Medium Confidence</div>
+            <div class="threshold-desc">Clusters above this score are marked Medium (below = Low)</div>
+            <div class="threshold-val" id="val-med-conf">0.45</div>
+            <input type="range" min="0.2" max="0.8" step="0.05" id="slider-med-conf" style="width:100%;accent-color:var(--med);margin-top:8px"
+              oninput="document.getElementById('val-med-conf').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.2</span><span>0.8</span></div>
+          </div>
+          <div class="threshold-card">
+            <div class="threshold-name">🔗 RFE Similarity Threshold</div>
+            <div class="threshold-desc">Minimum score to group two RFEs into the same cluster</div>
+            <div class="threshold-val" id="val-sim">0.55</div>
+            <input type="range" min="0.3" max="0.9" step="0.05" id="slider-sim" style="width:100%;accent-color:var(--accent);margin-top:8px"
+              oninput="document.getElementById('val-sim').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.3 (loose)</span><span>0.9 (strict)</span></div>
+          </div>
+          <div class="threshold-card">
+            <div class="threshold-name">⚡ Scoring Method</div>
+            <div class="threshold-desc">Current method used for RFE-to-RFE comparison</div>
+            <div id="scoring-method-info" style="margin-top:8px;font-size:13px;font-weight:600"></div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /page-scoring -->
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<!-- Email Drawer -->
+<div id="email-drawer">
+  <div class="drawer-header">
+    <span style="font-size:18px">📧</span>
+    <span class="drawer-title">Draft Email</span>
+    <button class="btn btn-ghost btn-sm" onclick="closeEmailDrawer()">✕ Close</button>
+  </div>
+  <div class="drawer-body" id="email-drawer-body">
+    <div style="color:var(--text-muted);text-align:center;padding:40px">Generating email…</div>
+  </div>
+  <div class="drawer-footer">
+    <button class="btn btn-ghost" style="flex:1" onclick="copyEmailToClipboard()">📋 Copy All</button>
+    <button class="btn btn-success" style="flex:1" id="drawer-approve-btn" onclick="approveFromDrawer()">✅ Approve Cluster</button>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<!-- Score tooltip — fixed position so it escapes any overflow:hidden ancestor -->
+<div id="score-tooltip-el" style="display:none;position:fixed;background:#1e293b;color:#f1f5f9;border-radius:8px;padding:9px 13px;font-size:11.5px;font-weight:400;line-height:1.6;white-space:pre-line;z-index:2500;pointer-events:none;min-width:230px;max-width:320px;box-shadow:0 6px 20px rgba(0,0,0,.3)"></div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let allClusters = (typeof window.__INITIAL_CLUSTERS__ !== 'undefined' && Array.isArray(window.__INITIAL_CLUSTERS__)) ? window.__INITIAL_CLUSTERS__ : [];
+let confFilter = 'all';   // 'all' | 'high' | 'medium' | 'low'
+let statusFilter = 'all'; // 'all' | 'delivered' | 'in_current_pi' | 'planned' | 'no_match'
+let groupBy = 'domain';
+let currentRunId = (typeof window.__INITIAL_RUN_ID__ !== 'undefined') ? window.__INITIAL_RUN_ID__ : null;
+let pollingTimer = null;
+let currentJobId = null;
+let drawerClusterId = null;
+let cfPages = [];
+let cfSpaceKey = '';
+let isScoring = false;  // guard: prevents loadClusters from overwriting the scoring loader
+
+// ─── Navigation ───────────────────────────────────────────────────────────────
+// Primary navigate() is defined in <head> as _nav() so it's always available.
+// This re-definition here ensures any in-body calls to navigate() also work
+// once the full script block has parsed (loadClusters etc. are defined here).
+function navigate(page) { _nav(page); }
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg, type='info') {
+  const icons = {info:'ℹ️',success:'✅',error:'❌'};
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type]||'ℹ️'}</span> ${msg}`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 4500);
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Extracts a clean summary: takes complete sentences up to maxLen chars, no ellipsis
+function fmtDate(d) {
+  if (!d) return null;
+  try {
+    const dt = new Date(d.replace(' ', 'T'));
+    if (isNaN(dt)) return d.slice(0, 10);
+    return dt.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  } catch { return d.slice(0, 10); }
+}
+
+function smartSummary(text, maxLen = 300) {
+  if (!text) return '';
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (t.length <= maxLen) return t;
+  const re = /[.!?](?:\s|$)/g;
+  let m, lastEnd = -1;
+  while ((m = re.exec(t)) !== null) {
+    if (m.index + 1 <= maxLen) lastEnd = m.index + 1;
+    else break;
+  }
+  if (lastEnd > 40) return t.slice(0, lastEnd).trim();
+  const cut = t.slice(0, maxLen);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > 40 ? cut.slice(0, sp) : cut).trim();
+}
+
+// Parses structured RFE descriptions (label: value patterns) into HTML.
+// Handles formats like "Details of RFE: ... What is the ask?: ..."
+// Falls back to plain multi-line text for unstructured content.
+function formatDescriptionHtml(text) {
+  if (!text) return '';
+  const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+
+  // Known label patterns (case-insensitive, flexible spacing/punctuation)
+  const LABELS = [
+    'Details of RFE', 'What is the ask', 'Customer Impact', 'Business Impact',
+    'Use Case', 'Current Behavior', 'Expected Behavior', 'Workaround',
+    'Additional Info', 'Notes', 'Background', 'Description',
+  ];
+  const labelRe = new RegExp(
+    '(' + LABELS.map(l => l.replace(/\s+/g, '\\s+')).join('|') + ')\\s*[:\\-]?\\s*',
+    'gi'
+  );
+
+  // Split by known labels
+  const parts = [];
+  let lastIdx = 0, lastLabel = null;
+  let match;
+  // Reset lastIndex
+  labelRe.lastIndex = 0;
+  while ((match = labelRe.exec(t)) !== null) {
+    if (lastLabel !== null) {
+      parts.push({ label: lastLabel, value: t.slice(lastIdx, match.index).trim() });
+    } else if (match.index > 0) {
+      // Leading text before first label
+      parts.push({ label: null, value: t.slice(0, match.index).trim() });
+    }
+    lastLabel = match[1].trim();
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastLabel !== null) {
+    parts.push({ label: lastLabel, value: t.slice(lastIdx).trim() });
+  }
+
+  if (parts.length === 0) {
+    // Unstructured: show up to 400 chars, 4 lines
+    const snippet = smartSummary(t, 400);
+    return `<div style="color:var(--text-muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden">${esc(snippet)}</div>`;
+  }
+
+  // Render structured parts
+  return parts.filter(p => p.value).map(p => {
+    const valSnippet = smartSummary(p.value, 220);
+    if (p.label) {
+      return `<div style="margin-bottom:5px">
+        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--accent);margin-right:5px">${esc(p.label)}:</span>
+        <span style="color:var(--text-muted);line-height:1.5">${esc(valSnippet)}</span>
+      </div>`;
+    }
+    return `<div style="color:var(--text-muted);line-height:1.55;margin-bottom:4px">${esc(valSnippet)}</div>`;
+  }).join('');
+}
+
+// ─── Score tooltips (JS-driven, escapes overflow:hidden) ─────────────────────
+(function() {
+  const tip = () => document.getElementById('score-tooltip-el');
+  function showTip(e) {
+    const el = e.target.closest('.score-tip');
+    if (!el) return;
+    const raw = el.getAttribute('data-tip');
+    if (!raw) return;
+    const t = tip();
+    t.textContent = raw;   // raw attribute value already has real \n from HTML-decoded &#10;
+    t.style.display = 'block';
+    placeTip(e.clientX, e.clientY, t);
+  }
+  function placeTip(cx, cy, t) {
+    const gap = 14, w = t.offsetWidth || 260, h = t.offsetHeight || 120;
+    let x = cx + gap;
+    let y = cy - h / 2;
+    if (x + w > window.innerWidth - 8) x = cx - w - gap;
+    if (y < 8) y = 8;
+    if (y + h > window.innerHeight - 8) y = window.innerHeight - h - 8;
+    t.style.left = x + 'px';
+    t.style.top  = y + 'px';
+  }
+  document.addEventListener('mouseover',  showTip);
+  document.addEventListener('mousemove',  e => { const t = tip(); if (t.style.display !== 'none') placeTip(e.clientX, e.clientY, t); });
+  document.addEventListener('mouseout',   e => { if (e.target.closest('.score-tip')) tip().style.display = 'none'; });
+})();
+
+// ─── CSV Import ───────────────────────────────────────────────────────────────
+function handleCsvDrop(e) {
+  e.preventDefault();
+  document.getElementById('csv-drop-zone').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.csv')) handleCsvFile(file);
+  else toast('Please drop a .csv file', 'error');
+}
+
+async function handleCsvFile(file) {
+  if (!file) return;
+  const zone = document.getElementById('csv-drop-zone');
+  const status = document.getElementById('csv-upload-status');
+
+  function setProgress(label, pct, sub='') {
+    document.getElementById('csv-inline-progress').style.display = 'block';
+    document.getElementById('csv-inline-label').textContent = label;
+    document.getElementById('csv-inline-pct').textContent = pct + '%';
+    document.getElementById('csv-inline-bar').style.width = pct + '%';
+    if (sub) document.getElementById('csv-inline-sub').textContent = sub;
+  }
+
+  setProgress(`Uploading ${file.name}…`, 5, 'Reading file…');
+  status.innerHTML = `<span style="color:var(--accent)"><span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span> Uploading ${file.name}…</span>`;
+
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    setProgress('Parsing CSV rows…', 15, 'Detecting columns and importing records…');
+    const res = await fetch('/api/import-csv', {method:'POST', body:form});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    currentJobId = data.job_id;
+    currentRunId = data.run_id;
+    setProgress(`Scoring ${data.rfe_count} RFEs…`, 20, 'Comparing RFEs for duplicates within each domain…');
+    status.innerHTML = `<span style="color:var(--success)">✅ ${data.rfe_count} RFEs imported — scoring in progress…</span>`;
+    zone.style.borderColor = 'var(--success)';
+    startPolling(data.job_id);
+  } catch(e) {
+    document.getElementById('csv-inline-progress').style.display = 'none';
+    status.innerHTML = `<span style="color:var(--high)">❌ ${e.message}</span>`;
+    toast('Import failed: ' + e.message, 'error');
+  }
+}
+
+// ─── Context uploads ──────────────────────────────────────────────────────────
+// ── Upload loader helpers ──────────────────────────────────────────────────────
+function _startUpload(cardId, statusId, label) {
+  const status = document.getElementById(statusId);
+  if (status) {
+    status.innerHTML = `<span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2);width:12px;height:12px;border-width:2px;vertical-align:middle;margin-right:5px"></span>Uploading ${label}…`;
+    status.className = 'source-status';
+  }
+  document.getElementById(cardId)?.querySelectorAll('.btn').forEach(b => b.disabled = true);
+}
+function _endUpload(cardId, statusId, errorMsg) {
+  document.getElementById(cardId)?.querySelectorAll('.btn').forEach(b => b.disabled = false);
+  if (errorMsg) {
+    const status = document.getElementById(statusId);
+    if (status) { status.textContent = '❌ ' + errorMsg; status.className = 'source-status'; }
+  }
+}
+
+async function uploadReleaseNotes(file) {
+  if (!file) return;
+  _startUpload('card-release_notes', 'status-release_notes', file.name);
+  const form = new FormData(); form.append('file', file);
+  try {
+    const res = await fetch('/api/context/release-notes', {method:'POST', body:form});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const versionNote = data.chunks > 1 ? ` · ${data.chunks} versions` : '';
+    markSourceLoaded('release_notes', `✅ ${file.name}${versionNote}`);
+    toast(`Release notes loaded${versionNote}`, 'success');
+    loadDocs();
+    _endUpload('card-release_notes', 'status-release_notes');
+  } catch(e) {
+    _endUpload('card-release_notes', 'status-release_notes', e.message);
+    toast('Upload failed: ' + e.message, 'error');
+  }
+}
+
+const adoLoaded = {ado_current_pi: null, ado_backlog: null};
+async function uploadAdoCsv(file, subType) {
+  if (!file) return;
+  const label = subType === 'ado_current_pi' ? 'Current PI' : 'Upcoming PI';
+  _startUpload('card-ado', 'status-ado', `${label} (${file.name})`);
+  const form = new FormData(); form.append('file', file); form.append('sub_type', subType);
+  try {
+    const res = await fetch('/api/context/ado-csv', {method:'POST', body:form});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    adoLoaded[subType] = `${data.inserted || data.rows} epics`;
+    const parts = Object.entries(adoLoaded).filter(([,v])=>v).map(([k,v])=>`${k==='ado_current_pi'?'Current PI':'Upcoming PI'}: ${v}`);
+    const st = document.getElementById('status-ado');
+    if (st) { st.textContent = '✅ ' + parts.join(' · '); st.className = 'source-status loaded'; }
+    document.getElementById('card-ado')?.classList.add('has-data');
+    toast(`ADO ${label} imported — ${data.inserted || data.rows} epics`, 'success');
+    loadDocs();
+    _endUpload('card-ado', 'status-ado');
+  } catch(e) {
+    _endUpload('card-ado', 'status-ado', e.message);
+    toast('Upload failed: ' + e.message, 'error');
+  }
+}
+
+async function uploadRoadmap(file) {
+  if (!file) return;
+  _startUpload('card-roadmap', 'status-roadmap', file.name);
+  const form = new FormData(); form.append('file', file);
+  try {
+    const res = await fetch('/api/context/roadmap', {method:'POST', body:form});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    markSourceLoaded('roadmap', `✅ ${file.name} (${(data.chars/1000).toFixed(0)}k chars)`);
+    toast('Roadmap imported', 'success');
+    loadDocs();
+    _endUpload('card-roadmap', 'status-roadmap');
+  } catch(e) {
+    _endUpload('card-roadmap', 'status-roadmap', e.message);
+    toast('Upload failed: ' + e.message, 'error');
+  }
+}
+
+function markSourceLoaded(type, msg) {
+  const card = document.getElementById('card-' + type);
+  const st = document.getElementById('status-' + type);
+  if (card) card.classList.add('has-data');
+  if (st) { st.textContent = msg; st.className = 'source-status loaded'; }
+}
+
+// ─── Confluence ───────────────────────────────────────────────────────────────
+async function connectConfluence() {
+  const btn = document.getElementById('btn-cf-connect');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Connecting…';
+  try {
+    const res = await fetch('/api/confluence/spaces');
+    if (!res.ok) { const err = await res.json(); throw new Error(err.detail || 'Connection failed'); }
+    const data = await res.json();
+    const spaces = data.spaces || [];
+    if (spaces.length === 0) throw new Error('No spaces found');
+    const select = document.getElementById('cf-space-select');
+    select.innerHTML = '<option value="">Select a space…</option>' +
+      spaces.map(s => `<option value="${s.key}" data-name="${s.name}">${s.name} (${s.key})</option>`).join('');
+    document.getElementById('cf-connect-area').style.display = 'none';
+    document.getElementById('cf-spaces-area').style.display = 'block';
+    document.getElementById('status-confluence').textContent = `✅ Connected — ${spaces.length} spaces`;
+    document.getElementById('status-confluence').className = 'source-status loaded';
+    toast(`Connected — ${spaces.length} spaces found`, 'success');
+  } catch(e) {
+    btn.disabled = false; btn.innerHTML = '🔗 Connect & Browse';
+    toast('Confluence error: ' + e.message, 'error');
+  }
+}
+
+async function loadPageTree() {
+  const select = document.getElementById('cf-space-select');
+  cfSpaceKey = select.value;
+  const name = select.options[select.selectedIndex]?.dataset.name || cfSpaceKey;
+  if (!cfSpaceKey) { toast('Select a space first', 'error'); return; }
+  const treeArea = document.getElementById('cf-tree-area');
+  const treeEl = document.getElementById('page-tree');
+  treeEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)"><span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span> Loading pages…</div>';
+  treeArea.style.display = 'block';
+  try {
+    const res = await fetch(`/api/confluence/page-tree?space_key=${cfSpaceKey}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    cfPages = data.pages || [];
+    document.getElementById('cf-tree-count').textContent = `${cfPages.length} pages in ${name}`;
+    renderPageTree(cfPages);
+  } catch(e) {
+    treeEl.innerHTML = `<div style="color:var(--high);padding:10px">${e.message}</div>`;
+    toast('Failed to load page tree: ' + e.message, 'error');
+  }
+}
+
+function renderPageTree(pages) {
+  const byId = {}; const roots = [];
+  pages.forEach(p => { byId[p.id] = {...p, children: []}; });
+  pages.forEach(p => {
+    if (p.parent_id && byId[p.parent_id]) byId[p.parent_id].children.push(byId[p.id]);
+    else roots.push(byId[p.id]);
+  });
+  const treeEl = document.getElementById('page-tree');
+  treeEl.innerHTML = '';
+  function renderNode(node, depth) {
+    const div = document.createElement('div');
+    div.className = 'tree-node';
+    div.style.paddingLeft = (depth * 16 + 6) + 'px';
+    div.innerHTML = `<input type="checkbox" class="cf-page-cb" value="${node.id}" checked> <span class="tree-node-title">${esc(node.title)}</span>`;
+    treeEl.appendChild(div);
+    node.children.forEach(c => renderNode(c, depth + 1));
+  }
+  roots.forEach(r => renderNode(r, 0));
+}
+
+function selectAllPages(checked) {
+  document.querySelectorAll('.cf-page-cb').forEach(cb => cb.checked = checked);
+}
+
+async function importSelectedPages() {
+  const selected = [...document.querySelectorAll('.cf-page-cb:checked')].map(cb => cb.value);
+  if (selected.length === 0) { toast('No pages selected', 'error'); return; }
+  document.getElementById('cf-tree-area').style.display = 'none';
+  document.getElementById('cf-import-progress').style.display = 'block';
+  document.getElementById('cf-progress-label').textContent = `Importing ${selected.length} pages…`;
+  try {
+    const res = await fetch('/api/confluence/import-pages', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({space_key: cfSpaceKey, page_ids: selected})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    pollCfImport(data.job_id, cfSpaceKey);
+  } catch(e) {
+    document.getElementById('cf-import-progress').style.display = 'none';
+    toast('Import failed: ' + e.message, 'error');
+  }
+}
+
+async function importConfluenceSpaceAll() {
+  const select = document.getElementById('cf-space-select');
+  const key = select.value;
+  const name = select.options[select.selectedIndex]?.dataset.name || key;
+  if (!key) { toast('Select a space first', 'error'); return; }
+  const form = new FormData(); form.append('space_key', key); form.append('space_name', name);
+  document.getElementById('cf-import-progress').style.display = 'block';
+  try {
+    const res = await fetch('/api/confluence/import-space', {method:'POST', body:form});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    pollCfImport(data.job_id, name);
+  } catch(e) {
+    document.getElementById('cf-import-progress').style.display = 'none';
+    toast('Import failed: ' + e.message, 'error');
+  }
+}
+
+async function pollCfImport(jobId, label) {
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/status/${jobId}`);
+      const job = await res.json();
+      document.getElementById('cf-progress-label').textContent = job.message;
+      if (job.status === 'done') {
+        clearInterval(interval);
+        document.getElementById('cf-import-progress').style.display = 'none';
+        markSourceLoaded('confluence', `✅ ${job.message}`);
+        toast(job.message, 'success'); loadDocs();
+      } else if (job.status === 'error') {
+        clearInterval(interval);
+        document.getElementById('cf-import-progress').style.display = 'none';
+        toast('Import error: ' + job.message, 'error');
+      }
+    } catch(e) { clearInterval(interval); }
+  }, 2000);
+}
+
+function _updateSourceBadges(docs) {
+  // Always runs — updates card badges regardless of docs-list rendering
+  try {
+    const rn = docs.filter(d => d.doc_type === 'release_notes').length;
+    if (rn > 0) markSourceLoaded('release_notes', `✅ ${rn} version${rn>1?'s':''} loaded`);
+
+    const rm = docs.filter(d => d.doc_type === 'roadmap').length;
+    if (rm > 0) markSourceLoaded('roadmap', `✅ ${rm} file${rm>1?'s':''} loaded`);
+
+    const cf = docs.filter(d => d.doc_type === 'confluence').length;
+    if (cf > 0) markSourceLoaded('confluence', `✅ ${cf} page${cf>1?'s':''} loaded`);
+
+    const adoPi = docs.filter(d => d.doc_type === 'ado_current_pi').length;
+    const adoBl = docs.filter(d => d.doc_type === 'ado_backlog').length;
+    if (adoPi > 0 || adoBl > 0) {
+      const parts = [];
+      if (adoPi > 0) parts.push(`Current PI: ${adoPi}`);
+      if (adoBl > 0) parts.push(`Upcoming PI: ${adoBl}`);
+      const st = document.getElementById('status-ado');
+      if (st) { st.textContent = '✅ ' + parts.join(' · '); st.className = 'source-status loaded'; }
+      document.getElementById('card-ado')?.classList.add('has-data');
+    }
+
+    const badge = document.getElementById('badge-sources');
+    if (badge) { badge.textContent = docs.length; badge.style.display = docs.length > 0 ? '' : 'none'; }
+  } catch(e) { console.error('badge update error:', e); }
+}
+
+async function loadDocs() {
+  let docs = [];
+  try {
+    const res = await fetch('/api/context');
+    const data = await res.json();
+    docs = data.docs || [];
+  } catch(e) { console.error('loadDocs fetch error:', e); return; }
+
+  // Update badges first — always, regardless of what happens below
+  _updateSourceBadges(docs);
+
+  // Update the loaded-docs list (separate try so errors here don't block badges)
+  try {
+    const section = document.getElementById('docs-section');
+    if (!section) return;
+    if (docs.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+    const icons = {release_notes:'📋',ado_current_pi:'🏃',ado_backlog:'📋',roadmap:'🗺️',confluence:'📝',backlog:'📁'};
+    const labels = {release_notes:'Release Notes',ado_current_pi:'ADO Current PI',ado_backlog:'ADO Backlog',roadmap:'Roadmap',confluence:'Confluence',backlog:'Backlog'};
+    const listEl = document.getElementById('docs-list');
+    if (listEl) listEl.innerHTML = docs.map(d => `
+      <div class="doc-row">
+        <span class="doc-type-badge badge-${d.doc_type}">${icons[d.doc_type]||'📄'} ${labels[d.doc_type]||d.doc_type}</span>
+        <span class="doc-title">${esc(d.title||'')}</span>
+        <span class="doc-meta">${d.chars ? Math.round(d.chars/1000)+'k chars · ' : ''}${(d.imported_at||'').substring(0,16).replace('T',' ')}</span>
+        <button class="btn btn-ghost btn-sm" onclick="deleteDoc(${d.id})">✕</button>
+      </div>`).join('');
+  } catch(e) { console.error('loadDocs list render error:', e); }
+}
+
+async function deleteDoc(id) {
+  await fetch(`/api/context/${id}`, {method:'DELETE'});
+  loadDocs(); toast('Document removed');
+}
+
+// ─── Polling ──────────────────────────────────────────────────────────────────
+function startPolling(jobId) {
+  clearInterval(pollingTimer);
+  pollingTimer = setInterval(() => pollStatus(jobId), 600);
+}
+
+const SCORING_STEPS = [
+  {icon:'🔍', label:'Reading RFE subjects & descriptions'},
+  {icon:'🔑', label:'Building keyword index from context sources'},
+  {icon:'⚡', label:'Pass 1 — keyword pre-filter'},
+  {icon:'🧠', label:'Pass 2 — semantic scoring candidates'},
+  {icon:'🏷️', label:'Assigning Delivered / In PI / Planned status'},
+  {icon:'✍️', label:'Generating cluster summaries'},
+];
+let scoringStepTimer = null;
+
+// Map actual progress % to the right step label — no random cycling
+function getScoringStep(pct) {
+  if (pct < 12) return SCORING_STEPS[0]; // Reading RFEs
+  if (pct < 28) return SCORING_STEPS[1]; // Building keyword index
+  if (pct < 55) return SCORING_STEPS[2]; // Pass 1 pre-filter
+  if (pct < 82) return SCORING_STEPS[3]; // Pass 2 semantic scoring
+  if (pct < 96) return SCORING_STEPS[4]; // Assigning status
+  return SCORING_STEPS[5];               // Generating summaries
+}
+function updateScoringStepLabel(pct) {
+  const el = document.getElementById('scoring-step-label');
+  if (!el) return;
+  const s = getScoringStep(pct);
+  el.innerHTML = `${s.icon} ${s.label}…`;
+}
+function stopScoringStepAnimation() { clearInterval(scoringStepTimer); }
+
+function showScoringLoader(msg, pct) {
+  const container = document.getElementById('signal-table-container');
+  if (!container) return;
+
+  const isPass1 = msg && msg.toLowerCase().includes('pre-filter');
+  const isPass2 = msg && (msg.toLowerCase().includes('scoring candidate') || msg.toLowerCase().includes('semantic'));
+  const isDone  = pct >= 100;
+
+  const step1Done = isPass2 || isDone;
+  const step2Done = isDone;
+
+  const stepStyle = (active, done) => {
+    if (done)   return 'background:#f0fdf4;border-color:#86efac;color:#15803d';
+    if (active) return 'background:#eff6ff;border-color:var(--accent);color:var(--accent-dark)';
+    return 'background:var(--bg);border-color:var(--border);color:var(--text-muted)';
+  };
+
+  const etaMatch = msg && msg.match(/—\s*(~.*remaining)/);
+  const label = etaMatch ? msg.replace(/\s*—\s*~.*remaining/, '') : (msg || 'Scoring…');
+  const eta   = etaMatch ? etaMatch[1] : '';
+  const barColor = isDone ? '#22c55e' : 'var(--accent)';
+  const pctColor = isDone ? '#15803d' : 'var(--accent)';
+  const hasExistingClusters = allClusters.filter(c => c.match_status !== 'no_match').length > 0;
+
+  if (hasExistingClusters && !isDone) {
+    // Clusters exist — show compact inline loader above the table, keep clusters visible
+    let inlineLoader = document.getElementById('inline-scoring-loader');
+    if (!inlineLoader) {
+      inlineLoader = document.createElement('div');
+      inlineLoader.id = 'inline-scoring-loader';
+      inlineLoader.style.cssText = 'background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;font-size:13px';
+      container.parentNode.insertBefore(inlineLoader, container);
+    }
+    inlineLoader.innerHTML = `<span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>
+      <span style="flex:1;color:var(--accent-dark);font-weight:600" id="scoring-step-label"></span>
+      <span style="color:var(--accent);font-weight:700">${pct}%</span>
+      <div style="width:120px;background:#bfdbfe;border-radius:4px;height:5px;overflow:hidden">
+        <div style="height:100%;background:var(--accent);width:${pct}%;transition:width .4s"></div>
+      </div>`;
+    updateScoringStepLabel(pct);
+    return;
+  }
+
+  // No clusters yet — show full-page loader
+  stopScoringStepAnimation();
+  const firstStep = SCORING_STEPS[0];
+  container.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:40px 48px;box-shadow:var(--shadow-md)">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:28px">
+        <div style="width:48px;height:48px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">${isDone ? '✅' : '⚡'}</div>
+        <div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:3px">${isDone ? 'Scoring complete' : 'Scoring in progress…'}</div>
+          <div style="font-size:12px;color:var(--text-muted)">Cross-referencing 1,458 RFEs against loaded context sources</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:0;margin-bottom:24px">
+        <div style="flex:1;padding:10px 16px;border-radius:7px 0 0 7px;border:1px solid;transition:all .3s;${stepStyle(isPass1 && !isDone, step1Done)}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px">Pass 1</div>
+          <div style="font-size:12px;font-weight:600">${step1Done?'✓ ':''}Keyword pre-filter</div>
+        </div>
+        <div style="flex:1;padding:10px 16px;border-radius:0 7px 7px 0;border:1px solid;border-left:none;transition:all .3s;${stepStyle(isPass2 && !isDone, step2Done)}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px">Pass 2</div>
+          <div style="font-size:12px;font-weight:600">${step2Done?'✓ ':''}Semantic scoring</div>
+        </div>
+      </div>
+
+      <div style="background:var(--bg);border-radius:8px;padding:12px 16px;margin-bottom:20px;min-height:42px;display:flex;align-items:center;gap:10px">
+        <span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2);${isDone?'display:none':''}"></span>
+        <span style="font-size:13px;color:var(--text-muted)" id="scoring-step-label">${isDone ? '✅ '+label : ''}</span>
+      </div>
+
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:7px">
+          <span style="color:var(--text-muted)">${label}</span>
+          <span style="color:${pctColor}">${pct}%</span>
+        </div>
+        <div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">
+          <div style="height:100%;background:${barColor};border-radius:6px;width:${pct}%;transition:width .4s ease"></div>
+        </div>
+        ${eta ? `<div style="text-align:right;font-size:11px;color:var(--text-muted);margin-top:5px">${eta}</div>` : ''}
+      </div>
+    </div>`;
+  if (!isDone) updateScoringStepLabel(pct);
+}
+
+function hideScoringPanel() {
+  stopScoringStepAnimation();
+  const inline = document.getElementById('inline-scoring-loader');
+  if (inline) setTimeout(() => inline.remove(), 1800);
+  setTimeout(() => { isScoring = false; loadClusters(); }, 1800);
+}
+
+function completeScoringPanel(msg) {
+  stopScoringStepAnimation();
+  showScoringLoader(msg, 100);
+  const inline = document.getElementById('inline-scoring-loader');
+  if (inline) {
+    inline.style.background = '#f0fdf4';
+    inline.style.borderColor = '#86efac';
+    inline.innerHTML = `<span>✅</span><span style="color:#15803d;font-weight:600;flex:1">${esc(msg)}</span>`;
+  }
+}
+
+async function pollStatus(jobId) {
+  try {
+    const res = await fetch(`/api/status/${jobId}`);
+    if (!res.ok) return;
+    const job = await res.json();
+    if (job.status === 'imported' || job.status === 'scoring') {
+      const p = job.total_pairs > 0 ? Math.round(job.processed_pairs / job.total_pairs * 100) : 25;
+      const pct = Math.max(p, 20);
+      const el = document.getElementById('csv-inline-progress');
+      if (el) {
+        el.style.display = 'block';
+        document.getElementById('csv-inline-bar').style.width = pct + '%';
+        document.getElementById('csv-inline-pct').textContent = pct + '%';
+        document.getElementById('csv-inline-label').textContent = job.message || 'Scoring…';
+      }
+      showScoringLoader(job.message || 'Scoring…', pct);
+      showGlobalProgress(job.message || 'Scoring…', pct);
+    } else if (job.status === 'done') {
+      clearInterval(pollingTimer);
+      document.getElementById('csv-inline-bar').style.width = '100%';
+      document.getElementById('csv-inline-pct').textContent = '100%';
+      document.getElementById('csv-inline-label').textContent = '✅ ' + job.message;
+      document.getElementById('csv-inline-sub').textContent = 'Scoring complete — go to Signal Match →';
+      setTimeout(() => { document.getElementById('csv-inline-progress').style.display = 'none'; }, 3000);
+      hideGlobalProgress();
+      completeScoringPanel(job.message);
+      const resBtn = document.getElementById('btn-rescore');
+      if (resBtn) { resBtn.disabled = false; resBtn.innerHTML = '⚡ Re-score'; }
+      toast(job.message, 'success');
+      updateBadge(); loadStats();
+      isScoring = false;
+      hideScoringPanel(); // waits 1.8s then calls loadClusters()
+    } else if (job.status === 'error') {
+      clearInterval(pollingTimer);
+      document.getElementById('csv-inline-progress').style.display = 'none';
+      hideGlobalProgress();
+      isScoring = false;
+      const resBtn = document.getElementById('btn-rescore');
+      if (resBtn) { resBtn.disabled = false; resBtn.innerHTML = '⚡ Re-score'; }
+      toast('Error: ' + job.message, 'error');
+      loadClusters();
+    }
+  } catch(e) {}
+}
+
+function showGlobalProgress(msg, pct) {
+  let el = document.getElementById('global-progress-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'global-progress-banner';
+    el.style.cssText = 'position:fixed;bottom:0;left:220px;right:0;background:var(--accent);color:#fff;padding:10px 24px;display:flex;align-items:center;gap:16px;z-index:500;font-size:13px;font-weight:600;box-shadow:0 -2px 12px rgba(0,0,0,.15)';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<span class="spinner"></span><span style="flex:1">${msg}</span>
+    <div style="width:200px;background:rgba(255,255,255,.3);border-radius:4px;height:6px">
+      <div style="width:${pct}%;background:#fff;height:100%;border-radius:4px;transition:width .5s"></div>
+    </div><span>${pct}%</span>`;
+}
+function hideGlobalProgress() {
+  const el = document.getElementById('global-progress-banner');
+  if (el) el.remove();
+}
+
+// ─── Stats ────────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const res = await fetch('/api/stats');
+    const s = await res.json();
+    document.getElementById('stat-total').textContent = s.total ?? '—';
+    const matchedRfeEl = document.getElementById('stat-matched-rfes');
+    if (matchedRfeEl) matchedRfeEl.textContent = s.matched_rfe_count ?? '—';
+    const rfeEl = document.getElementById('stat-rfe-big');
+    if (rfeEl) rfeEl.textContent = s.rfe_count ?? '—';
+    document.getElementById('stat-high').textContent = s.high ?? '—';
+    document.getElementById('stat-delivered').textContent = s.delivered ?? '—';
+    document.getElementById('stat-in-pi').textContent = s.in_current_pi ?? '—';
+    const arr = s.arr || 0;
+    document.getElementById('stat-arr').textContent =
+      arr >= 1e6 ? '$'+(arr/1e6).toFixed(1)+'M' :
+      arr >= 1e3 ? '$'+(arr/1e3).toFixed(0)+'K' :
+      arr > 0    ? '$'+arr.toFixed(0) : '—';
+  } catch(e) {}
+}
+
+// ─── Clusters / Signal Match ──────────────────────────────────────────────────
+async function loadClusters() {
+  if (isScoring) return;  // don't overwrite the scoring loader
+  try {
+    const url = currentRunId ? `/api/clusters?run_id=${currentRunId}` : '/api/clusters';
+    const res = await fetch(url);
+    const data = await res.json();
+    allClusters = data.clusters || [];
+    currentRunId = data.run_id;
+    populateDomainFilter();
+    renderSignalTable();
+    updateBadge();
+  } catch(e) {
+    document.getElementById('signal-table-container').innerHTML =
+      `<div class="empty-state"><div class="big-icon">⚠️</div><h3>Failed to load</h3><p>${e.message}</p></div>`;
+  }
+}
+
+function setGroupBy(mode, btn) {
+  groupBy = mode;
+  document.querySelectorAll('.group-toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderSignalTable();
+}
+
+function setFilter(f, btn) {
+  // "All" resets both filters
+  confFilter = 'all'; statusFilter = 'all';
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderSignalTable();
+}
+
+function setConfFilter(f, btn) {
+  confFilter = confFilter === f ? 'all' : f;
+  statusFilter = 'all';
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('filter-all').classList.remove('active');
+  if (confFilter !== 'all') btn.classList.add('active');
+  else document.getElementById('filter-all').classList.add('active');
+  renderSignalTable();
+}
+
+function setStatusFilter(f, btn) {
+  statusFilter = statusFilter === f ? 'all' : f;
+  confFilter = 'all';
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('filter-all').classList.remove('active');
+  if (statusFilter !== 'all') btn.classList.add('active');
+  else document.getElementById('filter-all').classList.add('active');
+  renderSignalTable();
+}
+
+function populateDomainFilter() {
+  const sel = document.getElementById('domain-filter');
+  if (!sel) return;
+  const domains = [...new Set(
+    allClusters.flatMap(c => (c.members||[]).map(m => m.domain).filter(Boolean))
+  )].sort();
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All Domains</option>' +
+    domains.map(d => `<option value="${d}"${d===cur?' selected':''}>${esc(d)}</option>`).join('');
+}
+
+function renderSignalTable() {
+  const search = (document.getElementById('signal-search')?.value || '').toLowerCase();
+  const domainSel = (document.getElementById('domain-filter')?.value || '');
+  const sortBy = document.getElementById('sort-by')?.value || 'confidence';
+
+  // Only show matched clusters — exclude no_match entirely
+  const matchedOnly = allClusters.filter(c => c.match_status && c.match_status !== 'no_match');
+  const noMatchRfeCount = allClusters
+    .filter(c => !c.match_status || c.match_status === 'no_match')
+    .reduce((sum, c) => sum + (c.members?.length || 1), 0);
+
+  // Show/hide "X RFEs had no match candidates" counter
+  const counterEl = document.getElementById('filtered-counter');
+  if (counterEl) {
+    if (noMatchRfeCount > 0) {
+      counterEl.style.display = '';
+      counterEl.textContent = `ℹ️ ${noMatchRfeCount} RFE${noMatchRfeCount !== 1 ? 's' : ''} had no match candidates and are not shown`;
+    } else {
+      counterEl.style.display = 'none';
+    }
+  }
+
+  let filtered = matchedOnly.filter(c => {
+    if (confFilter !== 'all' && c.confidence_band !== confFilter) return false;
+    if (statusFilter !== 'all' && c.match_status !== statusFilter) return false;
+    if (domainSel) {
+      const doms = (c.members||[]).map(m => m.domain).filter(Boolean);
+      if (!doms.includes(domainSel)) return false;
+    }
+    if (search) {
+      const members = c.members || [];
+      const hay = [c.cluster_title,
+        ...members.map(m => `${m.account_name||''} ${m.subject||''} ${m.case_number||''}`)
+      ].join(' ').toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  // Sort
+  filtered.sort((a, b) => {
+    if (sortBy === 'arr') return (b.total_arr||0) - (a.total_arr||0);
+    if (sortBy === 'date') {
+      const da = a.members?.[0]?.created_date || '';
+      const db = b.members?.[0]?.created_date || '';
+      return db.localeCompare(da);
+    }
+    return (b.confidence_score||0) - (a.confidence_score||0);
+  });
+
+  const container = document.getElementById('signal-table-container');
+  if (filtered.length === 0) {
+    if (allClusters.length === 0) {
+      container.innerHTML = `<div class="empty-state"><div class="big-icon">📡</div><h3>No signal data yet</h3>
+        <p>Upload your Salesforce CSV on the Data Sources page to start finding duplicate RFEs.</p>
+        <button class="btn btn-primary" onclick="navigate('sources')">→ Go to Data Sources</button></div>`;
+    } else if (matchedOnly.length === 0) {
+      const docsLoaded = parseInt(document.getElementById('badge-sources')?.textContent || '0');
+      if (docsLoaded > 0) {
+        container.innerHTML = `<div class="empty-state"><div class="big-icon">🎯</div><h3>No matches found</h3>
+          <p>${docsLoaded} context documents are loaded, but no RFE cluster scored above the similarity threshold against them.<br><br>
+          Try <strong>lowering the similarity threshold</strong> in Scoring Config, or check that the right docs are loaded.</p>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="navigate('scoring')">⚙️ Adjust thresholds</button>
+            <button class="btn btn-ghost" onclick="navigate('sources')">📂 Review sources</button>
+          </div></div>`;
+      } else {
+        container.innerHTML = `<div class="empty-state"><div class="big-icon">📂</div><h3>No context sources loaded yet</h3>
+          <p>Your RFEs are clustered, but Signal Match only shows clusters matched against a knowledge source.<br><br>
+          Upload <strong>Release Notes</strong>, <strong>ADO Epics</strong>, a <strong>Roadmap</strong>, or <strong>Confluence pages</strong> — then click <strong>Re-score</strong>.</p>
+          <button class="btn btn-primary" onclick="navigate('sources')">→ Load context sources</button></div>`;
+      }
+    } else {
+      container.innerHTML = `<div class="empty-state"><div class="big-icon">🔎</div><h3>No matches for this filter</h3><p>Try clearing the filter or selecting a different status.</p></div>`;
+    }
+    return;
+  }
+
+  // Group
+  const groups = {};
+  filtered.forEach(c => {
+    let key;
+    if (groupBy === 'domain') {
+      key = (c.members||[])[0]?.domain || 'Unknown Domain';
+    } else {
+      const accounts = [...new Set((c.members||[]).map(m => m.account_name).filter(Boolean))];
+      key = accounts.length > 0 ? accounts[0] + (accounts.length > 1 ? ` +${accounts.length-1}` : '') : 'Unknown Customer';
+    }
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(c);
+  });
+
+  let html = '';
+  const sortedGroups = Object.keys(groups).sort();
+  for (const grpKey of sortedGroups) {
+    const grpClusters = groups[grpKey];
+    html += `<div class="signal-table-wrap" style="margin-bottom:12px">
+      <div class="signal-group-header">
+        <span>${esc(grpKey)}</span>
+        <span style="font-weight:400">${grpClusters.length} cluster${grpClusters.length!==1?'s':''}</span>
+      </div>
+      <div>
+        <div class="signal-row" style="background:#fafafa;cursor:default">
+          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">Domain</div>
+          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">Cluster / RFEs</div>
+          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">Customer</div>
+          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;text-align:center">Score</div>
+          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">ARR</div>
+        </div>`;
+    grpClusters.forEach(c => { html += buildSignalRow(c); });
+    html += `</div></div>`;
+  }
+  container.innerHTML = html;
+}
+
+// ── Per-RFE matched sources pills (FR-03) ─────────────────────────────────────
+// clusterBd = cluster-level context_breakdown used as fallback when per-RFE data unavailable
+function buildMatchedSources(m, clusterBd) {
+  const hasPerRfe = m.ctx_breakdown && Object.keys(m.ctx_breakdown).length > 0;
+  const mBd  = hasPerRfe ? m.ctx_breakdown : (clusterBd || {});
+  const mMs  = m.match_status || 'no_match';
+  const srcBadgeStyle = {
+    release_notes:  'background:#f3e8ff;color:#7e22ce;border:1px solid #d8b4fe',
+    ado_current_pi: 'background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd',
+    ado_backlog:    'background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd',
+    confluence:     'background:#ccfbf1;color:#0f766e;border:1px solid #99f6e4',
+    roadmap:        'background:#ffedd5;color:#c2410c;border:1px solid #fdba74',
+  };
+  const srcBadgeLbl = {
+    release_notes:  'RELEASE NOTES',
+    ado_current_pi: 'ADO EPIC',
+    ado_backlog:    'ADO EPIC',
+    confluence:     'CONFLUENCE',
+    roadmap:        'ROADMAP',
+  };
+  const msStatusPfx = {
+    delivered:    ['release_notes'],
+    in_current_pi:['ado_current_pi'],
+    planned:      ['ado_backlog','roadmap','confluence'],
+  }[mMs] || [];
+  const msMark = {delivered:'✔ Delivered', in_current_pi:'✔ In PI', planned:'✔ Planned'}[mMs] || '';
+
+  // FIX-05: sort by score then keep ONE entry per docType (highest scorer wins)
+  const _sorted = Object.entries(mBd).filter(([,v]) => v >= 0.05).sort((a,b) => b[1]-a[1]);
+  const _seen = new Set();
+  const entries = _sorted.filter(([key]) => {
+    const dt = key.slice(0, key.indexOf('|') > -1 ? key.indexOf('|') : key.length);
+    if (_seen.has(dt)) return false;
+    _seen.add(dt); return true;
+  });
+
+  if (entries.length === 0) {
+    return `<div style="margin-top:6px;font-size:11px;color:var(--text-muted);font-style:italic">No specific source match found.</div>`;
+  }
+  const pills = entries.map(([key, score]) => {
+    const sep = key.indexOf('|');
+    const docType = sep > -1 ? key.slice(0, sep) : key;
+    const title   = sep > -1 ? key.slice(sep + 1) : key;
+    const bStyle  = srcBadgeStyle[docType] || 'background:#f1f5f9;color:var(--text-muted);border:1px solid var(--border)';
+    const bLbl    = srcBadgeLbl[docType]   || docType.toUpperCase().replace(/_/g,' ');
+    const isSrc   = msStatusPfx.some(p => key.startsWith(p));
+
+    // FIX-04: ADO Epics — show "Epic Name #ID" where only #ID is the clickable copy target
+    // FIX-03: Release Notes — title IS the version (e.g. "V4.32") — full title is copyable
+    let titleHtml;
+    if (docType === 'ado_current_pi' || docType === 'ado_backlog') {
+      const hashMatch = title.match(/\s(#\d+)$/);
+      if (hashMatch) {
+        const epicName = title.slice(0, title.length - hashMatch[0].length);
+        const epicId   = hashMatch[1];
+        const safeId   = esc(epicId).replace(/"/g, '&quot;');
+        titleHtml = `${esc(epicName)} <span data-cpid="${safeId}" style="cursor:pointer;color:var(--accent);font-weight:700" onclick="event.stopPropagation();copyMatchedId(this,this.getAttribute('data-cpid'))" title="Click to copy ID">${esc(epicId)}</span>`;
+      } else {
+        const safeAttr = esc(title).replace(/"/g, '&quot;');
+        titleHtml = `<span data-cpid="${safeAttr}" style="cursor:pointer;color:var(--text)" onclick="event.stopPropagation();copyMatchedId(this,this.getAttribute('data-cpid'))" title="Click to copy">${esc(title)}</span>`;
+      }
+    } else {
+      const safeAttr = esc(title).replace(/"/g, '&quot;');
+      titleHtml = `<span data-cpid="${safeAttr}" style="cursor:pointer;color:var(--text)" onclick="event.stopPropagation();copyMatchedId(this,this.getAttribute('data-cpid'))" title="Click to copy">${esc(title)}</span>`;
+    }
+
+    return `<div style="display:inline-flex;align-items:center;gap:5px;background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px">
+      <span style="${bStyle};border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700;white-space:nowrap">${bLbl}</span>
+      ${titleHtml}
+      <span style="color:var(--text-muted)">[${score.toFixed(2)}]</span>
+      ${isSrc && msMark ? `<span style="background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">${msMark}</span>` : ''}
+    </div>`;
+  }).join('');
+  const sourceLabel = hasPerRfe ? 'Matched Sources' : 'Matched Sources <span style="font-size:9px;font-weight:400;color:var(--text-muted);font-style:italic">(cluster-level)</span>';
+  return `<div style="margin-top:6px">
+    <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">${sourceLabel}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">${pills}</div>
+  </div>`;
+}
+
+function buildSignalRow(c) {
+  const members = c.members || [];
+  const accounts = [...new Set(members.map(m => m.account_name).filter(Boolean))];
+  const arr = c.total_arr >= 1e6 ? '$'+(c.total_arr/1e6).toFixed(1)+'M' :
+               c.total_arr >= 1e3 ? '$'+(c.total_arr/1e3).toFixed(0)+'K' :
+               c.total_arr > 0    ? '$'+c.total_arr.toFixed(0) : '—';
+  const domain = members[0]?.domain || '—';
+  const confBand = c.confidence_band || 'low';
+  const confDots = {high:'🟢',medium:'🟡',low:'🔴'};
+  const ms = c.match_status || 'no_match';
+  const statusLabels = {delivered:'✅ Delivered',in_current_pi:'🏃 In PI',planned:'🗓 Planned'};
+  const statusClasses = {delivered:'status-delivered',in_current_pi:'status-in_current_pi',planned:'status-planned'};
+  const statusChip = ms !== 'no_match'
+    ? `<span class="status-chip ${statusClasses[ms]||''}">${statusLabels[ms]||ms}</span>`
+    : '';
+  // Pre-compute sources for tooltips
+  const _ctxBd = (c.score_breakdown || {}).context_breakdown || {};
+  const _topSrc = Object.entries(_ctxBd).sort((a,b)=>b[1]-a[1])[0];
+  const _bandName = {high:'High',medium:'Medium',low:'Low'}[confBand] || confBand;
+  const _msName = {delivered:'Delivered',in_current_pi:'In Current PI',planned:'Planned',no_match:'No Match'}[ms] || ms;
+  // Find the source that actually DETERMINED the status (not just highest scorer)
+  const _statusSrcPfx = {delivered:['release_notes'],in_current_pi:['ado_current_pi'],planned:['ado_backlog','roadmap','confluence']}[ms]||[];
+  const _matchedSrc = Object.entries(_ctxBd)
+    .filter(([k]) => _statusSrcPfx.some(p => k.startsWith(p)))
+    .sort((a,b) => b[1]-a[1])[0] || _topSrc;
+  // Cluster chip tooltip — plain English
+  const _matchedSrcName = _matchedSrc ? (_matchedSrc[0].split('|')[1] || _matchedSrc[0].split('|')[0]) : null;
+  const _matchedSrcType = _matchedSrc ? _matchedSrc[0].split('|')[0].replace(/_/g,' ') : null;
+  const _clusterTip = [
+    `Similarity: ${(c.confidence_score||0).toFixed(2)} (${_bandName})`,
+    `These ${members.length} RFE${members.length!==1?'s':''} describe the same feature request`,
+    `and were auto-grouped by keyword overlap.`,
+    `──────────────────────────────`,
+    `Status → ${_msName}`,
+    _matchedSrc
+      ? `Matched in: ${_matchedSrcName} (${_matchedSrcType})`
+      : `No matching source found.`,
+    _matchedSrc
+      ? `${Math.round(_matchedSrc[1]*100)} out of 100 cluster keywords appear in that document.`
+      : ``,
+  ].filter(Boolean).join('&#10;');
+  const confChip = `<span class="chip chip-${confBand} score-tip" data-tip="${_clusterTip}">${confDots[confBand]||''} ${(c.confidence_score||0).toFixed(2)}</span>`;
+
+  const rowId = `row-${c.id}`;
+  const expandId = `expand-${c.id}`;
+
+  // ── Section A: AI confidence sentence ─────────────────────────────────────
+  const sentenceHtml = c.confidence_sentence
+    ? `<div style="margin-bottom:14px;font-style:italic;color:var(--text-muted);font-size:13px;line-height:1.5;border-left:3px solid var(--accent);padding-left:10px">${esc(c.confidence_sentence)}</div>`
+    : '';
+
+  // ── Section B: context sources + per-RFE grid ────────────────────────────────
+  const bd = c.score_breakdown || {};
+  const ctxBreakdown = bd.context_breakdown || {};
+
+  // Column layout: Case# | Subject | Signal | Match | State | Customer
+  const _rfeGrid = '72px 1fr 56px 105px 130px 145px';
+  const _rfeHeader = `
+    <div style="display:grid;grid-template-columns:${_rfeGrid};gap:8px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 0;border-bottom:1px solid var(--border);margin-bottom:2px">
+      <div style="text-align:center">Case #</div><div>Subject</div><div style="text-align:center">Signal</div><div style="text-align:center">Match Status</div><div style="text-align:center">RFE State</div><div style="text-align:center">Customer</div>
+    </div>`;
+
+  const rfeRowsHtml = _rfeHeader + members.map(m => {
+    const caseId = m.case_number || '—';
+    const descSummary = (m.description || '').trim();
+    // Per-RFE match status (from per-RFE scoring) with cluster-level fallback
+    const mMs = m.match_status || ms;
+    const mStatusChip = mMs !== 'no_match'
+      ? `<span class="status-chip ${statusClasses[mMs]||''}">${statusLabels[mMs]||mMs}</span>`
+      : '—';
+    // Per-RFE context signal score (from this RFE's own ctx_breakdown)
+    const _mBd = (m.ctx_breakdown && Object.keys(m.ctx_breakdown).length > 0)
+      ? m.ctx_breakdown : ctxBreakdown;
+    const _mEntries = Object.entries(_mBd).sort((a,b) => b[1]-a[1]);
+    const _mBest = _mEntries[0];
+    const _mSignal = _mBest ? _mBest[1] : null;
+    const _mSignalStr = _mSignal !== null ? _mSignal.toFixed(2) : '—';
+    // Status-matched source for this RFE
+    const _mSrcPfx = {delivered:['release_notes'],in_current_pi:['ado_current_pi'],planned:['ado_backlog','roadmap','confluence']}[mMs]||[];
+    const _mSrc = _mEntries.filter(([k]) => _mSrcPfx.some(p=>k.startsWith(p)))[0] || _mBest;
+    const _mSrcName = _mSrc ? _mSrc[0].split(‘|’)[1] || _mSrc[0].split(‘|’)[0] : null;
+    const _mSrcType = _mSrc ? _mSrc[0].split(‘|’)[0].replace(/_/g,’ ‘) : null;
+    const _mTip = [
+      `Signal: ${_mSignalStr}`,
+      _mSrc
+        ? `Found in: ${_mSrcName} (${_mSrcType})`
+        : `No context source matched this RFE`,
+      _mSrc
+        ? `${Math.round(_mSrc[1]*100)} out of 100 keywords from this RFE`
+        + `&#10;also appear in that document.`
+        + `&#10;(Higher = stronger match. 1.0 = full match)`
+        : ``,
+      `──────────────────────────────`,
+      `Grouped with ${members.length-1} similar RFE${members.length-1!==1?’s’:’’} (similarity ${(c.confidence_score||0).toFixed(2)})`,
+    ].filter(Boolean).join(‘&#10;’);
+    return `<div style="background:#f4f6f9;border-radius:6px;padding:8px 10px;margin-bottom:4px;transition:background .15s">
+      <div style="display:grid;grid-template-columns:${_rfeGrid};gap:8px;align-items:center;font-size:12px">
+        <span class="copy-case" onclick="copyCase(this,'${esc(caseId)}')" title="Click to copy" style="display:flex;align-items:center;justify-content:center;text-align:center">${esc(caseId)}</span>
+        <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" title="${esc(m.subject||'')}">${esc(m.subject||'—')}</span>
+        <span class="score-tip" style="color:var(--accent);font-weight:700;text-align:center;display:block" data-tip="${_mTip}">${_mSignalStr}</span>
+        <div style="display:flex;justify-content:center">${mStatusChip}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);text-align:center">${m.status ? esc(m.status) : '—'}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);text-align:center">${esc(m.account_name||'—')}</div>
+      </div>
+      <div style="margin-top:6px;padding-left:2px;font-size:12px;line-height:1.5">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+          <strong style="font-weight:700;color:var(--text)">Summary:</strong>
+          ${fmtDate(m.created_date) ? `<span style="font-size:11px;color:var(--text-muted)">📅 Opened: ${fmtDate(m.created_date)}</span>` : ''}
+        </div>
+        ${descSummary
+          ? `<div>${formatDescriptionHtml(descSummary)}</div>`
+          : `<div style="color:var(--text-muted);font-style:italic;line-height:1.5">No description provided.</div>`}
+      </div>
+      ${buildMatchedSources(m, ctxBreakdown)}
+    </div>`;
+  }).join('');
+
+  // ── Section C: Generate Email ───────────────────────────────────────────────
+  let emailSectionHtml;
+  if (accounts.length <= 1) {
+    const _singleAcct = accounts[0] || null;
+    const _acctArg = JSON.stringify(_singleAcct).replace(/"/g, '&quot;');
+    emailSectionHtml = `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openEmailDrawer(${c.id},${_acctArg})">✉ Generate Email</button>`;
+  } else {
+    emailSectionHtml = `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <select id="acct-sel-${c.id}" onclick="event.stopPropagation()" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)">
+          ${accounts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openEmailDrawer(${c.id},document.getElementById('acct-sel-${c.id}').value)">✉ Generate Email</button>
+      </div>`;
+  }
+
+  return `
+    <div class="signal-row" id="${rowId}" onclick="toggleExpand(${c.id})">
+      <div><span class="sig-domain">${esc(domain)}</span></div>
+      <div>
+        <div class="sig-title">${esc(c.cluster_title||'Untitled')}</div>
+        <div class="sig-accounts">${members.length} RFE${members.length!==1?'s':''}</div>
+      </div>
+      <div style="font-size:12px;font-weight:500;overflow:hidden">
+        ${accounts.length > 0
+          ? esc(accounts[0]) + (accounts.length > 1 ? `<br><span style="font-size:10px;color:var(--text-muted)">+${accounts.length-1} more</span>` : '')
+          : '—'}
+      </div>
+      <div style="text-align:center">${confChip}</div>
+      <div class="sig-arr">${arr}</div>
+    </div>
+    <div class="why-row" id="${expandId}" style="display:none">
+      <div class="why-panel">
+        ${sentenceHtml}
+        <div style="margin-bottom:14px;margin-top:${sentenceHtml?'12px':'0'}">
+          <div class="why-label" style="margin-bottom:6px">📋 RFEs in this cluster</div>
+          ${rfeRowsHtml || '<div style="color:var(--text-muted);font-size:12px">No RFEs</div>'}
+        </div>
+        <div style="padding-top:10px;border-top:1px solid var(--border)">
+          ${emailSectionHtml}
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleExpand(id) {
+  const el = document.getElementById('expand-' + id);
+  const row = document.getElementById('row-' + id);
+  if (!el) return;
+  const isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : '';
+  if (row) row.classList.toggle('expanded', !isOpen);
+}
+
+function copyCase(el, caseId) {
+  navigator.clipboard.writeText(caseId).then(() => {
+    const orig = el.textContent;
+    el.textContent = 'Copied ✓';
+    el.style.background = '#dcfce7';
+    el.style.color = '#15803d';
+    setTimeout(() => { el.textContent = orig; el.style.background = ''; el.style.color = ''; }, 2000);
+  }).catch(() => toast('Copy failed', 'error'));
+}
+
+function copySignalId(el, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = el.textContent;
+    el.textContent = '✓';
+    el.style.background = '#dcfce7';
+    el.style.color = '#15803d';
+    setTimeout(() => { el.textContent = orig; el.style.background = ''; el.style.color = ''; }, 1800);
+  }).catch(() => toast('Copy failed', 'error'));
+}
+
+function copyMatchedId(el, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = el.textContent;
+    el.textContent = 'Copied ✓';
+    el.style.color = '#15803d';
+    el.style.fontWeight = '700';
+    setTimeout(() => { el.textContent = orig; el.style.color = ''; el.style.fontWeight = ''; }, 1800);
+  }).catch(() => toast('Copy failed', 'error'));
+}
+
+// ─── Approve / Reject ─────────────────────────────────────────────────────────
+async function approveCluster(id) {
+  await fetch(`/api/clusters/${id}/approve`, {method:'PATCH'});
+  const c = allClusters.find(c => c.id === id);
+  if (c) c.status = 'approved';
+  renderSignalTable(); loadStats(); updateBadge();
+  toast('Cluster approved ✅', 'success');
+}
+async function rejectCluster(id) {
+  await fetch(`/api/clusters/${id}/reject`, {method:'PATCH'});
+  const c = allClusters.find(c => c.id === id);
+  if (c) c.status = 'rejected';
+  renderSignalTable(); loadStats(); updateBadge();
+  toast('Cluster rejected');
+}
+async function restoreCluster(id) {
+  await fetch(`/api/clusters/${id}/restore`, {method:'PATCH'});
+  const c = allClusters.find(c => c.id === id);
+  if (c) c.status = 'pending';
+  renderSignalTable(); loadStats(); updateBadge();
+  toast('Restored to pending');
+}
+async function approveAllHigh() {
+  const url = currentRunId ? `/api/clusters/approve-bulk-high?run_id=${currentRunId}` : '/api/clusters/approve-bulk-high';
+  const res = await fetch(url, {method:'POST'});
+  const data = await res.json();
+  toast(`Approved ${data.approved} high-confidence clusters`, 'success');
+  await loadClusters(); loadStats();
+}
+
+function updateBadge() {
+  // Only count pending clusters that are actually visible (matched, not no_match)
+  const pending = allClusters.filter(c => c.status === 'pending' && c.match_status && c.match_status !== 'no_match').length;
+  const b = document.getElementById('badge-signal');
+  b.textContent = pending; b.style.display = pending > 0 ? '' : 'none';
+}
+
+// ─── Email Drawer ─────────────────────────────────────────────────────────────
+function _emailStatusBadge(ms) {
+  return {
+    delivered:     '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">✅ Delivered</span>',
+    in_current_pi: '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">🏃 In Current PI</span>',
+    planned:       '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">🗓 Planned</span>',
+    no_match:      '<span style="background:#f1f5f9;color:#64748b;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700">— No Match</span>',
+  }[ms] || '';
+}
+
+function openEmailDrawer(clusterId, accountName) {
+  drawerClusterId = clusterId;
+  document.getElementById('email-drawer').classList.add('open');
+
+  const cluster = allClusters.find(c => c.id === clusterId);
+  const members = cluster?.members || [];
+
+  // All RFEs for this specific account in the cluster
+  const acctMembers = accountName
+    ? members.filter(m => m.account_name === accountName)
+    : members;
+
+  const _slabels = {delivered:'✅ Delivered', in_current_pi:'🏃 In PI', planned:'🗓 Planned', no_match:'📝 No Match'};
+  const _spinner = `<div style="color:var(--text-muted);text-align:center;padding:30px">
+    <span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>
+    <br><br>Generating email…</div>`;
+
+  if (acctMembers.length > 1) {
+    // Multiple RFEs for this account → show RFE picker
+    const opts = acctMembers.map(m => {
+      const sl = _slabels[m.match_status] || '📝 No Match';
+      const subj = (m.subject || '').slice(0, 50);
+      return `<option value="${m.id}">[${m.case_number||'—'}] ${subj} — ${sl}</option>`;
+    }).join('');
+    document.getElementById('email-drawer-body').innerHTML = `
+      <div style="margin-bottom:14px">
+        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);display:block;margin-bottom:5px">Select RFE</label>
+        <select id="email-rfe-sel" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--card);color:var(--text)">
+          ${opts}
+        </select>
+      </div>
+      <div id="email-content-area">${_spinner}</div>`;
+    document.getElementById('email-rfe-sel').onchange = function() {
+      _renderEmailContent(clusterId, parseInt(this.value));
+    };
+    _renderEmailContent(clusterId, acctMembers[0].id);
+  } else {
+    // Single RFE → generate immediately, no picker needed
+    document.getElementById('email-drawer-body').innerHTML =
+      `<div id="email-content-area">${_spinner}</div>`;
+    _renderEmailContent(clusterId, acctMembers[0]?.id || null);
+  }
+}
+
+async function _renderEmailContent(clusterId, memberId) {
+  const area = document.getElementById('email-content-area');
+  if (!area) return;
+  area.innerHTML = `<div style="color:var(--text-muted);text-align:center;padding:30px">
+    <span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>
+    <br><br>Generating email…</div>`;
+  try {
+    const payload = {cluster_id: clusterId};
+    if (memberId) payload.member_id = memberId;
+    const res = await fetch('/api/preview-email', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const email = await res.json();
+    const cluster = allClusters.find(c => c.id === clusterId);
+    const ms = email.effective_status || cluster?.match_status || 'no_match';
+    area.innerHTML = `
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <strong style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(email.rfe_subject || cluster?.cluster_title || 'Cluster')}</strong>
+        ${_emailStatusBadge(ms)}
+      </div>
+      <div class="email-field">
+        <label>To</label>
+        <div class="val" id="email-to">${esc(email.to||'—')}</div>
+      </div>
+      <div class="email-field">
+        <label>Subject</label>
+        <div class="val" id="email-subject">${esc(email.subject||'—')}</div>
+      </div>
+      <div class="email-field">
+        <label>Body</label>
+        <textarea class="email-textarea" id="email-body">${esc(email.body||'—')}</textarea>
+      </div>
+      ${email._template
+        ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">⚡ Template email · add ANTHROPIC_API_KEY for AI-generated emails</div>'
+        : '<div style="font-size:11px;color:var(--success)">🤖 Generated by Claude AI</div>'}`;
+  } catch(e) {
+    area.innerHTML = `<div style="color:var(--high);padding:16px">❌ ${e.message}</div>`;
+    toast('Preview failed: ' + e.message, 'error');
+  }
+}
+
+function closeEmailDrawer() {
+  document.getElementById('email-drawer').classList.remove('open');
+  drawerClusterId = null;
+}
+
+function copyEmailToClipboard() {
+  const to = document.getElementById('email-to')?.textContent || '';
+  const subj = document.getElementById('email-subject')?.textContent || '';
+  const body = document.getElementById('email-body')?.value || '';
+  const text = `To: ${to}\nSubject: ${subj}\n\n${body}`;
+  navigator.clipboard.writeText(text).then(() => toast('Email copied to clipboard ✅', 'success'))
+    .catch(() => toast('Copy failed — try manual select', 'error'));
+}
+
+async function approveFromDrawer() {
+  if (drawerClusterId) { await approveCluster(drawerClusterId); }
+  closeEmailDrawer();
+}
+
+// ─── Scoring Config ───────────────────────────────────────────────────────────
+const WEIGHT_META = [
+  {key:'weight_release_notes',   label:'Release Notes',         desc:'Shipped features — highest signal',            color:'#15803d'},
+  {key:'weight_ado_current_pi',  label:'ADO — Current PI',      desc:'Epics actively in development this PI',        color:'#1d4ed8'},
+  {key:'weight_ado_backlog',     label:'ADO — Upcoming PI',     desc:'Epics planned for a future PI (not yet committed)', color:'#0369a1'},
+  {key:'weight_confluence_dated',label:'Confluence (dated)',    desc:'Docs with clear dates (used for decay)',        color:'#7e22ce'},
+  {key:'weight_roadmap',         label:'Roadmap (PPTX/PDF)',    desc:'Roadmap slides and documents',                  color:'#92400e'},
+  {key:'weight_confluence_undated',label:'Confluence (undated)','desc':'General wiki pages without clear dates',      color:'#64748b'},
+];
+
+async function loadScoringConfig() {
+  try {
+    const res = await fetch('/api/scoring-config');
+    const cfg = await res.json();
+
+    // Render weight rows
+    const container = document.getElementById('weight-rows');
+    container.innerHTML = WEIGHT_META.map(m => `
+      <div class="weight-row">
+        <div class="weight-label">
+          <div class="weight-name" style="color:${m.color}">${m.label}</div>
+          <div class="weight-desc">${m.desc}</div>
+        </div>
+        <div class="weight-control">
+          <input type="range" min="0" max="1.0" step="0.05" id="w-${m.key}"
+            value="${cfg[m.key]||0}"
+            oninput="document.getElementById('wv-${m.key}').textContent=parseFloat(this.value).toFixed(1)"/>
+          <span class="weight-val" id="wv-${m.key}">${(cfg[m.key]||0).toFixed(1)}</span>
+        </div>
+      </div>`).join('');
+
+    document.getElementById('toggle-recency').checked = cfg.recency_decay !== false;
+    document.getElementById('slider-high-conf').value = cfg.threshold_high || 0.75;
+    document.getElementById('val-high-conf').textContent = (cfg.threshold_high || 0.75).toFixed(2);
+    document.getElementById('slider-med-conf').value = cfg.threshold_medium || 0.45;
+    document.getElementById('val-med-conf').textContent = (cfg.threshold_medium || 0.45).toFixed(2);
+    document.getElementById('slider-sim').value = cfg.similarity_threshold || 0.55;
+    document.getElementById('val-sim').textContent = (cfg.similarity_threshold || 0.55).toFixed(2);
+    document.getElementById('scoring-method-info').innerHTML = cfg.anthropic_key_set
+      ? '<span style="color:var(--success)">🤖 Claude AI scoring enabled</span>'
+      : '<span style="color:#0369a1">⚡ Basic text scoring (add ANTHROPIC_API_KEY for AI)</span>';
+  } catch(e) { toast('Failed to load config', 'error'); }
+}
+
+async function saveScoringConfig() {
+  const payload = { recency_decay: document.getElementById('toggle-recency').checked,
+                    threshold_high: parseFloat(document.getElementById('slider-high-conf').value),
+                    threshold_medium: parseFloat(document.getElementById('slider-med-conf').value),
+                    similarity_threshold: parseFloat(document.getElementById('slider-sim').value) };
+  WEIGHT_META.forEach(m => {
+    const el = document.getElementById('w-' + m.key);
+    if (el) payload[m.key] = parseFloat(el.value);
+  });
+  try {
+    const res = await fetch('/api/scoring-config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if (!res.ok) throw new Error(await res.text());
+    toast('Scoring config saved ✅', 'success');
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+function resetScoringConfig() {
+  const defaults = {weight_release_notes:1.0,weight_ado_current_pi:0.9,weight_ado_backlog:0.6,
+                    weight_confluence_dated:0.5,weight_roadmap:0.4,weight_confluence_undated:0.3};
+  WEIGHT_META.forEach(m => {
+    const el = document.getElementById('w-' + m.key);
+    const vl = document.getElementById('wv-' + m.key);
+    if (el) { el.value = defaults[m.key]; if (vl) vl.textContent = defaults[m.key].toFixed(1); }
+  });
+  document.getElementById('toggle-recency').checked = true;
+  document.getElementById('slider-high-conf').value = 0.75;
+  document.getElementById('val-high-conf').textContent = '0.75';
+  document.getElementById('slider-med-conf').value = 0.45;
+  document.getElementById('val-med-conf').textContent = '0.45';
+  toast('Reset to defaults');
+}
+
+// ─── Re-score ─────────────────────────────────────────────────────────────────
+async function rescoreRun() {
+  const btn = document.getElementById('btn-rescore');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scoring…';
+  isScoring = true;
+  // Show loader immediately — before the API call returns
+  navigate('signal');
+  showScoringLoader('Connecting to scoring engine…', 3);
+  try {
+    const res = await fetch('/api/rescore', {method:'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    currentJobId = data.job_id;
+    currentRunId = data.run_id;
+    showScoringLoader('Starting…', 5);
+    showGlobalProgress('Re-scoring against context sources…', 5);
+    startPolling(data.job_id);
+  } catch(e) {
+    isScoring = false;
+    btn.disabled = false; btn.innerHTML = '⚡ Re-score';
+    toast('Re-score failed: ' + e.message, 'error');
+    loadClusters();
+  }
+}
+
+// ─── Resume polling on page load ──────────────────────────────────────────────
+async function resumePollingIfActive() {
+  try {
+    const res = await fetch('/api/stats');
+    const s = await res.json();
+    if (s.run_id && s.run_status === 'running') {
+      isScoring = true;
+      showGlobalProgress('Scoring in progress — please wait…', 50);
+      showScoringLoader('Scoring in progress…', 50);
+      document.getElementById('csv-upload-status').innerHTML =
+        '<span style="color:var(--accent)">⏳ Scoring in progress…</span>';
+      document.getElementById('csv-inline-progress').style.display = 'block';
+      document.getElementById('csv-inline-label').textContent = 'Scoring RFEs…';
+      document.getElementById('csv-inline-pct').textContent = '~50%';
+      document.getElementById('csv-inline-bar').style.width = '50%';
+      const t = setInterval(async () => {
+        const r2 = await fetch('/api/stats');
+        const s2 = await r2.json();
+        if (s2.run_status === 'scored') {
+          clearInterval(t);
+          hideGlobalProgress();
+          document.getElementById('csv-inline-progress').style.display = 'none';
+          document.getElementById('csv-upload-status').innerHTML =
+            `<span style="color:var(--success)">✅ Scoring complete — ${s2.total||0} clusters found</span>`;
+          toast(`Scoring complete — ${s2.total||0} clusters found`, 'success');
+          updateBadge(); loadStats();
+        }
+      }, 3000);
+    }
+  } catch(e) {}
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+// Apply server-injected counts synchronously (no async needed)
+function _applyInitialCounts() {
+  try {
+    const counts = window.__INITIAL_COUNTS__;
+    if (!counts) return;
+    // Build a fake docs array so _updateSourceBadges can work
+    const fakeDocs = [];
+    for (const [type, cnt] of Object.entries(counts)) {
+      for (let i = 0; i < cnt; i++) fakeDocs.push({doc_type: type});
+    }
+    _updateSourceBadges(fakeDocs);
+  } catch(e) { console.error('_applyInitialCounts error:', e); }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  try { _applyInitialCounts(); } catch(e) { console.error('initCounts:', e); }
+  try { _nav('sources'); } catch(e) { console.error('navigate:', e); }
+  try { loadDocs(); } catch(e) { console.error('loadDocs init:', e); }
+  // Preload cluster data in background so Signal Match renders instantly on tab click
+  try { loadClusters(); } catch(e) { console.error('preload clusters:', e); }
+  try { await restoreSession(); } catch(e) { console.error('restoreSession:', e); }
+  try { resumePollingIfActive(); } catch(e) { console.error('resumePolling:', e); }
+});
+
+async function restoreSession() {
+  try {
+    const res = await fetch('/api/stats');
+    const s = await res.json();
+    if (!s.run_id) return;
+
+    // Restore run ID so Signal Match tab works immediately
+    currentRunId = s.run_id;
+
+    if (s.run_status === 'scored' && s.rfe_count > 0) {
+      // Show success state on the CSV drop zone without requiring re-upload
+      const clusterSummary = s.total > 0 ? `${s.total} matched clusters` : `${s.no_match_clusters || 0} clusters (no context sources loaded yet)`;
+      document.getElementById('csv-upload-status').innerHTML =
+        `<span style="color:var(--success)">✅ ${s.rfe_count} RFEs loaded · ${clusterSummary} · data saved in DB</span>`;
+      document.getElementById('csv-drop-zone').style.borderColor = 'var(--success)';
+      document.getElementById('pipeline-bar') && (document.getElementById('pipeline-bar').style.display = '');
+      updateBadge();
+      loadStats();
+
+    }
+  } catch(e) {}
+}
+</script>
+</body>
+</html>

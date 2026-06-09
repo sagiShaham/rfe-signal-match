@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+rfe_dedup.db
+.env
+*.log
+nohup.out
+*.zip
+*.DS_Store

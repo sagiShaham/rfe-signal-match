@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rfe-signal-match",
+      "runtimeExecutable": "/Users/sshaham/Library/CloudStorage/OneDrive-CynetLTD/Desktop/Work/RFEs enhancment/Hackathon/venv/bin/uvicorn",
+      "runtimeArgs": ["main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/Users/sshaham/Library/CloudStorage/OneDrive-CynetLTD/Desktop/Work/RFEs enhancment/Hackathon"],
+      "port": 8000
+    }
+  ]
+}
