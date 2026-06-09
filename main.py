@@ -1041,6 +1041,21 @@ async def api_clusters(run_id: Optional[str] = None):
     conn.close()
     return {"clusters": clusters, "run_id": run_id}
 
+@app.get("/api/search-clusters")
+async def api_search_clusters(q: str = ""):
+    """Search clusters by Case ID, subject, keyword — returns rendered HTML fragment."""
+    conn = get_db()
+    run_row = conn.execute(
+        "SELECT run_id FROM run_meta ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    if not run_row:
+        conn.close()
+        return HTMLResponse('<div class="empty-state"><div class="big-icon">📡</div>'
+                            '<h3>No data yet</h3><p>Upload a CSV first.</p></div>')
+    html, _ = _build_clusters_for_page(conn, run_row["run_id"], search_query=q)
+    conn.close()
+    return HTMLResponse(html)
+
 @app.patch("/api/clusters/{cluster_id}/approve")
 async def api_approve(cluster_id: int):
     conn = get_db(); cur = conn.cursor()
@@ -1456,12 +1471,58 @@ def _sf_pull_sync(run_id, days_back, job_id, sf_user, sf_pass, sf_token, sf_doma
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# ── Predefined domain buckets (the 12 canonical Cynet domains) ────────────────
+CANONICAL_DOMAINS = [
+    "Endpoint", "Cloud", "SIEM", "Identity", "ESPM",
+    "Automation", "Platform", "MSP", "Email", "Mobile", "On-prem", "Reports",
+]
+
+# Keywords → canonical domain  (checked in order; first match wins)
+_DOMAIN_KEYWORDS: list = [
+    (["endpoint", "edr", "epp", "agent", "windows", "linux", "mac", "desktop",
+       "workstation", "vulnerability", "misconfiguration", "cve", "inventory",
+       "application control", "defender"], "Endpoint"),
+    (["cloud", "aws", "azure", "gcp", "cspm", "alibaba", "s3", "bucket",
+       "saas", "sandblast", "checkpoint harmony"], "Cloud"),
+    (["siem", "clm", "log", "ingestion", "splunk", "qradar", "sentinel",
+       "libraesva", "email security", "armis", "mikrotik", "checkpoint",
+       "data source", "indexing", "field event"], "SIEM"),
+    (["identity", "ad", "active directory", "ldap", "mfa", "okta",
+       "saml", "sso", "privileged", "user account"], "Identity"),
+    (["espm", "spm", "posture", "exposure", "risk score", "attack surface"], "ESPM"),
+    (["automation", "playbook", "soar", "response", "action", "remediation",
+       "workflow", "trigger", "script"], "Automation"),
+    (["platform", "api", "integration", "webhook", "sdk", "tenant",
+       "role", "permission", "operator", "read only", "rbac"], "Platform"),
+    (["msp", "multi-tenant", "managed service", "site", "cynet operator"], "MSP"),
+    (["email", "mail", "phishing", "spam", "smtp"], "Email"),
+    (["mobile", "ios", "android", "phone", "tablet"], "Mobile"),
+    (["on-prem", "on_prem", "onprem", "local", "offline"], "On-prem"),
+    (["report", "dashboard", "analytic", "chart", "export", "pdf",
+       "csv", "graph", "trend"], "Reports"),
+]
+
+def _map_domain(raw_domain: str, cluster_title: str = "") -> str:
+    """Map a raw Salesforce domain + cluster title to one of the 12 canonical domains."""
+    haystack = f"{raw_domain or ''} {cluster_title or ''}".lower()
+    for keywords, canonical in _DOMAIN_KEYWORDS:
+        if any(kw in haystack for kw in keywords):
+            return canonical
+    # If raw domain exactly matches one of the canonicals (case-insensitive), use it
+    for d in CANONICAL_DOMAINS:
+        if d.lower() == (raw_domain or "").lower():
+            return d
+    return raw_domain or "Other"
+
+
 # ── Server-side cluster HTML rendering (mirrors JS buildSignalRow / renderSignalTable)
-def _build_clusters_for_page(conn, run_id: str):  # noqa: C901
+def _build_clusters_for_page(conn, run_id: str,  # noqa: C901
+                              search_query: str = ""):
     """
     Returns (html_str, clusters_list) where:
     - html_str is the pre-rendered HTML for signal-table-container
     - clusters_list is the JSON-serialisable list to inject as window.__INITIAL_CLUSTERS__
+    search_query: if set, filter clusters to those matching case ID / subject / keyword
     """
     import html as _h
     E = _h.escape          # same as JS esc()
@@ -1513,11 +1574,51 @@ def _build_clusters_for_page(conn, run_id: str):  # noqa: C901
                 c.get("match_reason", ""), c.get("confidence_score", 0)
             )
 
-    # ── Group by domain (first member's domain) ──────────────────────────────
+    # ── Apply search filter ───────────────────────────────────────────────────
+    if search_query:
+        q = search_query.lower().strip()
+        filtered = []
+        for c in clusters:
+            # Match on cluster title
+            if q in (c.get("cluster_title") or "").lower():
+                filtered.append(c); continue
+            # Match on any member case number, subject, or description
+            matched = False
+            for m in c.get("members", []):
+                if (q in (m.get("case_number") or "").lower() or
+                        q in (m.get("subject") or "").lower() or
+                        q in (m.get("description") or "").lower() or
+                        q in (m.get("account_name") or "").lower()):
+                    matched = True; break
+            if matched:
+                filtered.append(c)
+        clusters = filtered
+
+    if not clusters:
+        if search_query:
+            return (
+                '<div class="empty-state"><div class="big-icon">🔎</div>'
+                '<h3>No results</h3>'
+                f'<p>No clusters matched <strong>{_h.escape(search_query)}</strong>'
+                ' — try a different case ID, subject, or keyword.</p></div>'
+            ), []
+        return '', []
+
+    # ── Map each cluster to a canonical domain & annotate ────────────────────
+    for c in clusters:
+        raw_dom = (c["members"][0].get("domain") if c["members"] else None) or ""
+        c["_canonical_domain"] = _map_domain(raw_dom, c.get("cluster_title", ""))
+
+    # ── Group by canonical domain (preserve CANONICAL_DOMAINS order) ─────────
     groups: dict = {}
     for c in clusters:
-        grp = ((c["members"][0].get("domain") or "Unknown Domain") if c["members"] else "Unknown Domain")
+        grp = c["_canonical_domain"]
         groups.setdefault(grp, []).append(c)
+    # Sort groups by the canonical order; unknowns go last
+    def _grp_sort_key(k):
+        try: return CANONICAL_DOMAINS.index(k)
+        except ValueError: return 999
+    groups = dict(sorted(groups.items(), key=lambda kv: _grp_sort_key(kv[0])))
 
     _STATUS_LABELS  = {'delivered': '✅ Delivered', 'in_current_pi': '🏃 In PI', 'planned': '🗓 Planned'}
     _STATUS_CLASSES = {'delivered': 'status-delivered', 'in_current_pi': 'status-in_current_pi', 'planned': 'status-planned'}
@@ -1645,7 +1746,7 @@ def _build_clusters_for_page(conn, run_id: str):  # noqa: C901
     def _build_row(c):
         members   = c.get("members", [])
         accounts  = list(dict.fromkeys(m["account_name"] for m in members if m.get("account_name")))
-        domain    = (members[0].get("domain") if members else None) or '—'
+        domain    = c.get("_canonical_domain") or (members[0].get("domain") if members else None) or '—'
         ms        = c.get("match_status", "no_match")
         conf_band = c.get("confidence_band", "low")
         conf_scr  = c.get("confidence_score", 0) or 0
@@ -1782,9 +1883,9 @@ def _build_clusters_for_page(conn, run_id: str):  # noqa: C901
             f'</div></div>'
         )
 
-    # ── Assemble HTML ─────────────────────────────────────────────────────────
+    # ── Assemble HTML (groups already sorted by canonical order) ─────────────
     html_parts = []
-    for grp_key in sorted(groups.keys()):
+    for grp_key in groups.keys():
         grp_clusters = groups[grp_key]
         n = len(grp_clusters)
         rows_html = "".join(_build_row(c) for c in grp_clusters)

@@ -366,6 +366,44 @@ function copyEmailToClipboard() {
     .catch(function() { _toast('Copy failed — try manual select', 'error'); });
 }
 
+// ── Search clusters (Case ID, subject, keyword — debounced, server-side) ──────
+var _searchTimer = null;
+var _originalClusterHtml = null;   // cache of the full pre-rendered list
+
+function _doSearch(query) {
+  clearTimeout(_searchTimer);
+  var container = document.getElementById('signal-table-container');
+  if (!container) return;
+
+  // Save original HTML on first search so we can restore it on clear
+  if (_originalClusterHtml === null) {
+    _originalClusterHtml = container.innerHTML;
+  }
+
+  if (!query || !query.trim()) {
+    // Restore full list — try JS re-render first, fall back to saved HTML
+    try { renderSignalTable(); } catch(e) {
+      if (_originalClusterHtml !== null) container.innerHTML = _originalClusterHtml;
+    }
+    return;
+  }
+
+  _searchTimer = setTimeout(async function() {
+    container.innerHTML =
+      '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px">' +
+      '🔍 Searching…</div>';
+    try {
+      var res = await fetch('/api/search-clusters?q=' + encodeURIComponent(query.trim()));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      container.innerHTML = await res.text();
+    } catch(e) {
+      container.innerHTML =
+        '<div class="empty-state"><div class="big-icon">⚠️</div>' +
+        '<h3>Search error</h3><p>' + esc(e.message) + '</p></div>';
+    }
+  }, 280);
+}
+
 // ── Expand/collapse a cluster row ─────────────────────────────────────────────
 function toggleExpand(id) {
   var el  = document.getElementById('expand-' + id);
@@ -656,7 +694,7 @@ function navigate(page) { _nav(page); }
           <option value="arr">ARR ↓</option>
           <option value="date">Recency ↓</option>
         </select>
-        <input class="search-input" id="signal-search" placeholder="Search title, account, case #…" oninput="renderSignalTable()" style="max-width:200px"/>
+        <input class="search-input" id="signal-search" placeholder="Case ID, subject, keyword…" oninput="_doSearch(this.value)" style="max-width:240px"/>
         <button class="btn btn-primary btn-sm" id="btn-rescore" style="margin-left:auto" onclick="rescoreRun()">⚡ Re-score</button>
       </div>
 
