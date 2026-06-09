@@ -8,3 +8,9 @@ rfe_dedup.db
 nohup.out
 *.zip
 *.DS_Store
+# Data files (not versioned)
+*.csv
+*.xls
+*.xlsx
+*.pptx
+~$*
