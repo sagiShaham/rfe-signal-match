@@ -1831,12 +1831,17 @@ def _build_clusters_for_page(conn, run_id: str,  # noqa: C901
             )
 
         # ── Email section: customer dropdown (multi-account) ──────────────────
-        # Requirement: if multiple customers → show dropdown to pick account
+        # json.dumps produces "Name" with double-quotes; &quot; makes it safe
+        # inside an HTML onclick="…" attribute.
+        def _safe_js_str(s):
+            """JSON-encode a string and make it safe inside an HTML attribute."""
+            return json.dumps(s).replace('"', '&quot;')
+
         if len(accounts) <= 1:
-            acct_json = json.dumps(accounts[0] if accounts else None)
+            acct_arg = _safe_js_str(accounts[0]) if accounts else 'null'
             email_html = (
                 f'<button class="btn btn-primary btn-sm" '
-                f'onclick="event.stopPropagation();openEmailDrawer({cid},{acct_json})">'
+                f'onclick="event.stopPropagation();openEmailDrawer({cid},{acct_arg})">'
                 f'✉ Generate Email</button>'
             )
         else:
