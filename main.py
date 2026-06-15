@@ -353,55 +353,117 @@ def _auto_migrate_release_notes(conn):
             )
         conn.commit()
 
-async def score_run(run_id: str, job_id: str):
+# ── Domain taxonomy — defined here so score_run + import_csv can use it ───────
+
+CANONICAL_DOMAINS = [
+    "Endpoint", "Cloud", "SIEM", "Identity", "ESPM",
+    "Automation", "Platform", "MSP", "Email", "Mobile", "On-prem", "Reports",
+]
+
+_DOMAIN_KEYWORDS: list = [
+    (["endpoint", "edr", "epp", "agent", "windows", "linux", "mac", "desktop",
+       "workstation", "vulnerability", "misconfiguration", "cve", "inventory",
+       "application control", "defender"], "Endpoint"),
+    (["cloud", "aws", "azure", "gcp", "cspm", "alibaba", "s3", "bucket",
+       "saas", "sandblast", "checkpoint harmony"], "Cloud"),
+    (["siem", "clm", "log", "ingestion", "splunk", "qradar", "sentinel",
+       "libraesva", "email security", "armis", "mikrotik", "checkpoint",
+       "data source", "indexing", "field event", "cold storage", "firewall"], "SIEM"),
+    (["identity", "ad", "active directory", "ldap", "mfa", "okta",
+       "saml", "sso", "privileged", "user account"], "Identity"),
+    (["espm", "spm", "posture", "exposure", "risk score", "attack surface"], "ESPM"),
+    (["automation", "playbook", "soar", "response", "action", "remediation",
+       "workflow", "trigger", "script"], "Automation"),
+    (["platform", "api", "integration", "webhook", "sdk", "tenant",
+       "role", "permission", "operator", "read only", "rbac"], "Platform"),
+    (["msp", "multi-tenant", "managed service", "site", "cynet operator"], "MSP"),
+    (["email", "mail", "phishing", "spam", "smtp"], "Email"),
+    (["mobile", "ios", "android", "phone", "tablet"], "Mobile"),
+    (["on-prem", "on_prem", "onprem", "local", "offline"], "On-prem"),
+    (["report", "dashboard", "analytic", "chart", "export", "pdf",
+       "csv", "graph", "trend"], "Reports"),
+]
+
+def _map_domain(raw_domain: str, cluster_title: str = "") -> str:
+    """Map a raw Salesforce domain + free text to one of the 12 canonical domains."""
+    haystack = f"{raw_domain or ''} {cluster_title or ''}".lower()
+    for keywords, canonical in _DOMAIN_KEYWORDS:
+        if any(kw in haystack for kw in keywords):
+            return canonical
+    for d in CANONICAL_DOMAINS:
+        if d.lower() == (raw_domain or "").lower():
+            return d
+    return raw_domain or "Other"
+
+async def score_run(run_id: str, job_id: str):  # noqa: C901
+    """
+    New pipeline (v1.2):
+      Phase 1 — Score every RFE individually against context docs.
+      Phase 2 — Cluster only matched RFEs (demand enrichment).
+      Phase 3 — Write cluster records; solo matched RFEs become 1-member clusters.
+    """
     conn = get_db()
-    # Auto-migrate combined release-notes docs to per-version chunks (no re-upload needed)
     _auto_migrate_release_notes(conn)
-    rows = [dict(r) for r in conn.execute("SELECT * FROM rfe_pulls WHERE run_id=?", (run_id,)).fetchall()]
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM rfe_pulls WHERE run_id=?", (run_id,)
+    ).fetchall()]
     ctx_docs = [dict(r) for r in conn.execute(
         "SELECT id,doc_type,title,content,imported_at,doc_date FROM context_docs"
     ).fetchall()]
     conn.close()
 
     if not rows:
-        jobs[job_id].update(status="done", message="No RFEs to score.", cluster_count=0); return
+        jobs[job_id].update(status="done", message="No RFEs to score.", cluster_count=0)
+        return
 
-    scoring_cfg = get_scoring_config()
-    threshold = scoring_cfg['similarity_threshold']
-    high_threshold = scoring_cfg.get('threshold_high', 0.75)
-    medium_threshold = scoring_cfg.get('threshold_medium', 0.45)
-    total_original = len(rows)
+    scoring_cfg  = get_scoring_config()
+    threshold    = scoring_cfg['similarity_threshold']
+    high_thr     = scoring_cfg.get('threshold_high', 0.75)
+    med_thr      = scoring_cfg.get('threshold_medium', 0.45)
+    total        = len(rows)
 
-    # ── Pass 1: keyword pre-filter ────────────────────────────────────────────
-    filtered_rfe_count = 0
-    if ctx_docs:
-        all_ctx_tokens: set = set()
-        for doc in ctx_docs:
-            all_ctx_tokens |= tokenize((doc.get('content') or '')[:30000])
+    # ── PHASE 1: Score every RFE individually against context docs ─────────────
+    jobs[job_id].update(status="scoring",
+                        message=f"Phase 1 of 2 — Scoring {total} RFEs against context… 0 / {total}",
+                        total_pairs=total, processed_pairs=0)
 
-        jobs[job_id].update(status="scoring",
-                            message=f"Pre-filtering RFEs… 0 / {total_original}",
-                            total_pairs=total_original, processed_pairs=0)
-        passing = []
-        for i, rfe in enumerate(rows):
-            rfe_tokens = tokenize(f"{rfe.get('subject','')} {(rfe.get('description') or '')[:500]}")
-            if len(rfe_tokens & all_ctx_tokens) >= 2:
-                passing.append(rfe)
-            if (i + 1) % 50 == 0 or i == total_original - 1:
-                jobs[job_id].update(processed_pairs=i + 1,
-                                    message=f"Pre-filtering RFEs… {i+1} / {total_original}")
+    rfe_scores: Dict[int, dict] = {}   # rfe_id → {match_status, match_reason, ctx_breakdown, signal_score}
+    matched_rows: list = []            # only RFEs that scored above any threshold
 
-        filtered_rfe_count = total_original - len(passing)
-        rows = passing
-        conn2 = get_db()
-        conn2.execute("UPDATE run_meta SET filtered_rfe_count=? WHERE run_id=?",
-                      (filtered_rfe_count, run_id))
-        conn2.commit(); conn2.close()
+    for i, rfe in enumerate(rows):
+        rfe_text = f"{rfe.get('subject','') or ''} {(rfe.get('description') or '')[:500]}"
+        m_status, m_reason, m_bd = determine_match_status(rfe_text, ctx_docs, scoring_cfg)
+        signal = max(m_bd.values()) if m_bd else 0.0
+        rfe_scores[rfe["id"]] = {
+            "match_status":  m_status,
+            "match_reason":  m_reason,
+            "ctx_breakdown": m_bd,
+            "signal_score":  signal,
+        }
+        if m_status != "no_match":
+            matched_rows.append(rfe)
+        if (i + 1) % 100 == 0 or i == total - 1:
+            jobs[job_id].update(
+                processed_pairs=i + 1,
+                message=(f"Phase 1 of 2 — Scoring RFEs… {i+1} / {total} "
+                         f"({len(matched_rows)} matched so far)"),
+            )
 
-    # ── Pass 2: full semantic scoring ─────────────────────────────────────────
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    # Persist how many were filtered out
+    conn2 = get_db()
+    conn2.execute("UPDATE run_meta SET filtered_rfe_count=? WHERE run_id=?",
+                  (total - len(matched_rows), run_id))
+    conn2.commit(); conn2.close()
+
+    jobs[job_id].update(
+        message=(f"Phase 1 complete — {len(matched_rows)} / {total} RFEs matched. "
+                 f"Starting clustering…"),
+    )
+
+    # ── PHASE 2: Cluster only matched RFEs ────────────────────────────────────
+    api_key   = os.getenv("ANTHROPIC_API_KEY", "").strip()
     use_claude = bool(api_key)
-    client = None
+    client    = None
     if use_claude:
         try:
             import anthropic as _anthropic
@@ -409,131 +471,188 @@ async def score_run(run_id: str, job_id: str):
         except ImportError:
             use_claude = False
 
+    mode_label = "Claude AI" if use_claude else "text similarity"
+
     domain_groups: Dict[str, list] = defaultdict(list)
-    for rfe in rows:
+    for rfe in matched_rows:
         domain_groups[rfe.get("domain") or "Unknown"].append(rfe)
 
-    rfe_index = {rfe["id"]: i for i, rfe in enumerate(rows)}
-    uf = UnionFind(len(rows))
-    pair_best: Dict[int, float] = {}
-    pair_reason: Dict[int, dict] = {}
+    rfe_index  = {rfe["id"]: i for i, rfe in enumerate(matched_rows)}
+    uf         = UnionFind(len(matched_rows))
+    pair_best:   Dict[int, float] = {}
+    pair_reason: Dict[int, dict]  = {}
 
-    total_pairs = sum(len(g) * (len(g) - 1) // 2 for g in domain_groups.values() if len(g) >= 2)
+    total_pairs = sum(len(g) * (len(g) - 1) // 2
+                      for g in domain_groups.values() if len(g) >= 2)
     processed = 0
-    mode_label = "Claude AI" if use_claude else "text similarity"
-    jobs[job_id].update(status="scoring",
-                        message=f"Scoring candidates… 0 / {total_pairs}",
-                        total_pairs=total_pairs, processed_pairs=0, scoring_mode=mode_label)
+
+    jobs[job_id].update(
+        status="clustering",
+        message=(f"Phase 2 of 2 — Clustering {len(matched_rows)} matched RFEs "
+                 f"({total_pairs} pairs, {mode_label})… 0 / {total_pairs}"),
+        total_pairs=total_pairs, processed_pairs=0, scoring_mode=mode_label,
+    )
 
     import time as _time
     t_start = _time.time()
 
     for domain, group in domain_groups.items():
-        if len(group) < 2: continue
+        if len(group) < 2:
+            continue
         pairs = list(itertools.combinations(group, 2))
         if use_claude:
             batch_size = 5
             for i in range(0, len(pairs), batch_size):
-                batch = pairs[i:i+batch_size]
+                batch = pairs[i:i + batch_size]
                 results = await asyncio.gather(
                     *[claude_similarity(client, r1, r2) for r1, r2 in batch],
                     return_exceptions=True)
                 for (r1, r2), result in zip(batch, results):
                     if not isinstance(result, Exception):
-                        _apply_pair(result, r1, r2, rfe_index, uf, pair_best, pair_reason, threshold)
+                        _apply_pair(result, r1, r2, rfe_index, uf,
+                                    pair_best, pair_reason, threshold)
                     processed += 1
                 elapsed = _time.time() - t_start
                 rate = processed / elapsed if elapsed > 0 else 1
-                remaining = int((total_pairs - processed) / rate) if rate > 0 else 0
-                eta = f"~{remaining//60}m {remaining%60}s remaining" if remaining > 10 else "almost done"
+                rem = int((total_pairs - processed) / rate) if rate > 0 else 0
+                eta = f"~{rem//60}m {rem%60}s remaining" if rem > 10 else "almost done"
                 jobs[job_id].update(processed_pairs=processed,
-                                    message=f"Scoring candidates… {processed} / {total_pairs} — {eta}")
+                                    message=f"Phase 2 of 2 — Clustering… {processed} / {total_pairs} — {eta}")
         else:
             for r1, r2 in pairs:
                 result = basic_similarity(r1, r2)
-                _apply_pair(result, r1, r2, rfe_index, uf, pair_best, pair_reason, threshold)
+                _apply_pair(result, r1, r2, rfe_index, uf,
+                            pair_best, pair_reason, threshold)
                 processed += 1
             elapsed = _time.time() - t_start
             rate = processed / elapsed if elapsed > 0 else 1
-            remaining = int((total_pairs - processed) / rate) if rate > 0 and processed < total_pairs else 0
-            eta = f"~{remaining//60}m {remaining%60}s remaining" if remaining > 10 else "almost done"
+            rem = int((total_pairs - processed) / rate) if rate > 0 and processed < total_pairs else 0
+            eta = f"~{rem//60}m {rem%60}s remaining" if rem > 10 else "almost done"
             jobs[job_id].update(processed_pairs=processed,
-                                message=f"Scoring candidates… {processed} / {total_pairs} — {eta}")
+                                message=f"Phase 2 of 2 — Clustering… {processed} / {total_pairs} — {eta}")
 
-    # Build clusters
-    clusters: Dict[int, list] = defaultdict(list)
-    for i, rfe in enumerate(rows):
-        clusters[uf.find(i)].append(rfe)
+    # Build Union-Find groups
+    clusters_map: Dict[int, list] = defaultdict(list)
+    for i, rfe in enumerate(matched_rows):
+        clusters_map[uf.find(i)].append(rfe)
+
+    # ── PHASE 3: Write cluster records ────────────────────────────────────────
+    _STATUS_PRIORITY = ["delivered", "in_current_pi", "planned", "no_match"]
+    def _status_rank(s): return _STATUS_PRIORITY.index(s) if s in _STATUS_PRIORITY else 99
 
     conn = get_db(); cur = conn.cursor()
-    created_at = datetime.utcnow().isoformat()
+    created_at    = datetime.utcnow().isoformat()
     cluster_count = 0
 
-    for root, members in clusters.items():
-        if len(members) < 2: continue
-        score = pair_best.get(root, threshold)
-        sim_reason_data = pair_reason.get(root, {})
-        # Confidence band using new thresholds
-        band = "high" if score >= high_threshold else "medium" if score >= medium_threshold else "low"
-        best = max(members, key=lambda r: r.get("account_arr") or 0)
-        title = best.get("subject") or best.get("account_name") or "Untitled"
-        member_ids = [m["id"] for m in members]
-        unique_accounts = len({m["account_name"] for m in members if m.get("account_name")})
-        total_arr = sum(m.get("account_arr") or 0 for m in members)
+    for root, members in clusters_map.items():
+        is_solo       = len(members) == 1
+        sim_data      = pair_reason.get(root, {})
+        raw_sim_score = pair_best.get(root, 0.0)
 
-        # Determine match status from context docs (cluster-level)
-        cluster_text = " ".join(
-            f"{m.get('subject','')} {(m.get('description') or '')[:200]}" for m in members
-        )
-        match_status, match_reason, ctx_breakdown = determine_match_status(cluster_text, ctx_docs, scoring_cfg)
+        # Confidence score & band
+        if is_solo:
+            conf_score = rfe_scores[members[0]["id"]]["signal_score"]
+        else:
+            conf_score = raw_sim_score
+        band = ("high"   if conf_score >= high_thr else
+                "medium" if conf_score >= med_thr  else "low")
 
-        # Per-RFE individual matching so each RFE knows which specific source it matched
-        member_matches = []
-        for m in members:
-            member_text = f"{m.get('subject','')} {(m.get('description') or '')[:500]}"
-            m_status, _m_reason, m_bd = determine_match_status(member_text, ctx_docs, scoring_cfg)
-            member_matches.append({
-                "id": m["id"],
-                "match_status": m_status,
-                "ctx_breakdown": m_bd,
-            })
+        # Cluster title = subject of highest-ARR member
+        best_member = max(members, key=lambda r: r.get("account_arr") or 0)
+        title        = best_member.get("subject") or best_member.get("account_name") or "Untitled"
+        member_ids   = [m["id"] for m in members]
+        total_arr    = sum(m.get("account_arr") or 0 for m in members)
+        unique_accts = len({m["account_name"] for m in members if m.get("account_name")})
+
+        # Per-member match data (already computed in Phase 1)
+        member_matches = [
+            {
+                "id":           m["id"],
+                "match_status": rfe_scores[m["id"]]["match_status"],
+                "ctx_breakdown":rfe_scores[m["id"]]["ctx_breakdown"],
+            }
+            for m in members
+        ]
+
+        # Cluster-level status = best individual status (delivered > in_pi > planned)
+        best_mm    = min(member_matches, key=lambda x: _status_rank(x["match_status"]))
+        match_status = best_mm["match_status"]
+
+        # Cluster context breakdown = union of member breakdowns (highest score per key)
+        ctx_breakdown: dict = {}
+        for mm in member_matches:
+            for k, v in mm["ctx_breakdown"].items():
+                if v > ctx_breakdown.get(k, 0):
+                    ctx_breakdown[k] = v
+
+        match_reason = ""
+        if ctx_breakdown:
+            best_k   = max(ctx_breakdown, key=ctx_breakdown.get)
+            doc_name = best_k.split("|")[-1]
+            match_reason = f"Matched '{doc_name}' (signal {ctx_breakdown[best_k]:.2f})"
 
         score_breakdown = json.dumps({
-            "similarity_reason": sim_reason_data.get("reason", "Shared key terms in RFE descriptions"),
-            "common_terms": sim_reason_data.get("common", []),
-            "confidence": round(score, 3),
+            "similarity_reason": (sim_data.get("reason", "Individual context match")
+                                  if is_solo else
+                                  sim_data.get("reason", "Shared key terms in RFE descriptions")),
+            "common_terms":      sim_data.get("common", []),
+            "confidence":        round(conf_score, 3),
             "context_breakdown": ctx_breakdown,
-            "match_score": max(ctx_breakdown.values()) if ctx_breakdown else 0,
-            "rfe_count": len(members),
-            "domains": list({m.get("domain","") for m in members if m.get("domain")}),
-            "member_matches": member_matches,
+            "match_score":       max(ctx_breakdown.values()) if ctx_breakdown else 0,
+            "rfe_count":         len(members),
+            "domains":           list({m.get("domain", "") for m in members if m.get("domain")}),
+            "member_matches":    member_matches,
+            "solo":              is_solo,
         })
 
-        confidence_sentence = generate_confidence_sentence(title, match_status, match_reason, score)
+        confidence_sentence = generate_confidence_sentence(
+            title, match_status, match_reason, conf_score)
 
         cur.execute(
-            "INSERT INTO rfe_clusters (run_id,cluster_title,confidence_score,confidence_band,"
+            "INSERT INTO rfe_clusters "
+            "(run_id,cluster_title,confidence_score,confidence_band,"
             "member_case_numbers,total_arr,account_count,status,match_status,match_reason,"
-            "score_breakdown,confidence_sentence,created_at) VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)",
-            (run_id, title, score, band, json.dumps(member_ids), total_arr, unique_accounts,
-             match_status, match_reason, score_breakdown, confidence_sentence, created_at),
+            "score_breakdown,confidence_sentence,created_at) "
+            "VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)",
+            (run_id, title, conf_score, band, json.dumps(member_ids),
+             total_arr, unique_accts,
+             match_status, match_reason, score_breakdown,
+             confidence_sentence, created_at),
         )
         cluster_count += 1
 
-    cur.execute("UPDATE run_meta SET cluster_count=?,status='scored',completed_at=? WHERE run_id=?",
-                (cluster_count, created_at, run_id))
+    cur.execute(
+        "UPDATE run_meta SET cluster_count=?,status='scored',completed_at=? WHERE run_id=?",
+        (cluster_count, created_at, run_id),
+    )
     conn.commit(); conn.close()
-    jobs[job_id].update(status="done",
-                        message=f"Done — {cluster_count} duplicate clusters found ({mode_label}).",
-                        cluster_count=cluster_count)
+    jobs[job_id].update(
+        status="done",
+        message=(f"Done — {cluster_count} signals found "
+                 f"({len(matched_rows)} matched RFEs, {mode_label})."),
+        cluster_count=cluster_count,
+    )
 
 def _apply_pair(result, r1, r2, rfe_index, uf, pair_best, pair_reason, threshold):
     score = float(result.get("score", 0))
-    if score >= threshold:
+
+    # Fix 2 — domain/sub-domain bonus: same taxonomy = easier to cluster.
+    # Applied only for the threshold gate; raw score is stored for confidence band.
+    d1 = (r1.get("domain") or "").strip().lower()
+    d2 = (r2.get("domain") or "").strip().lower()
+    s1 = (r1.get("sub_domain") or "").strip().lower()
+    s2 = (r2.get("sub_domain") or "").strip().lower()
+    domain_bonus = 0.0
+    if d1 and d1 == d2:
+        domain_bonus += 0.10          # same domain
+        if s1 and s1 == s2:
+            domain_bonus += 0.10      # same domain + same sub-domain → 0.20 total
+
+    if score + domain_bonus >= threshold:
         idx1, idx2 = rfe_index[r1["id"]], rfe_index[r2["id"]]
         uf.union(idx1, idx2)
         root = uf.find(idx1)
-        if pair_best.get(root, 0) < score:
+        if pair_best.get(root, 0) < score:   # store raw score (not inflated)
             pair_best[root] = score
             pair_reason[root] = result
 
@@ -566,8 +685,29 @@ async def import_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         )
     cur.execute("INSERT OR REPLACE INTO run_meta (run_id,started_at,rfe_count,status,source) VALUES (?,?,?,'imported','csv')",
                 (run_id, pulled_at, len(records)))
-    conn.commit(); conn.close()
-    jobs[job_id].update(status="imported", message=f"Imported {len(records)} RFEs — starting scoring…", rfe_count=len(records))
+    conn.commit()
+
+    # Fix 3 — Infer domain for blank-domain RFEs before scoring begins.
+    # RFEs without a domain field land in a useless mixed bucket; keyword inference
+    # puts them next to the right peers (CLM→SIEM, S3→Cloud, etc.).
+    blank_rows = conn.execute(
+        "SELECT id, subject, description FROM rfe_pulls "
+        "WHERE run_id=? AND (domain IS NULL OR domain='')", (run_id,)
+    ).fetchall()
+    inferred_count = 0
+    for br in blank_rows:
+        text = f"{br['subject'] or ''} {br['description'] or ''}"
+        inferred = _map_domain("", text)
+        if inferred and inferred != "Other":
+            conn.execute("UPDATE rfe_pulls SET domain=? WHERE id=?", (inferred, br["id"]))
+            inferred_count += 1
+    if inferred_count:
+        conn.commit()
+
+    conn.close()
+    jobs[job_id].update(status="imported",
+                        message=f"Imported {len(records)} RFEs ({inferred_count} domains inferred) — starting scoring…",
+                        rfe_count=len(records))
     background_tasks.add_task(score_run, run_id, job_id)
     return {"job_id": job_id, "run_id": run_id, "rfe_count": len(records), "columns_detected": col_map}
 
@@ -1470,50 +1610,6 @@ def _sf_pull_sync(run_id, days_back, job_id, sf_user, sf_pass, sf_token, sf_doma
 # ─── Serve frontend ───────────────────────────────────────────────────────────
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# ── Predefined domain buckets (the 12 canonical Cynet domains) ────────────────
-CANONICAL_DOMAINS = [
-    "Endpoint", "Cloud", "SIEM", "Identity", "ESPM",
-    "Automation", "Platform", "MSP", "Email", "Mobile", "On-prem", "Reports",
-]
-
-# Keywords → canonical domain  (checked in order; first match wins)
-_DOMAIN_KEYWORDS: list = [
-    (["endpoint", "edr", "epp", "agent", "windows", "linux", "mac", "desktop",
-       "workstation", "vulnerability", "misconfiguration", "cve", "inventory",
-       "application control", "defender"], "Endpoint"),
-    (["cloud", "aws", "azure", "gcp", "cspm", "alibaba", "s3", "bucket",
-       "saas", "sandblast", "checkpoint harmony"], "Cloud"),
-    (["siem", "clm", "log", "ingestion", "splunk", "qradar", "sentinel",
-       "libraesva", "email security", "armis", "mikrotik", "checkpoint",
-       "data source", "indexing", "field event"], "SIEM"),
-    (["identity", "ad", "active directory", "ldap", "mfa", "okta",
-       "saml", "sso", "privileged", "user account"], "Identity"),
-    (["espm", "spm", "posture", "exposure", "risk score", "attack surface"], "ESPM"),
-    (["automation", "playbook", "soar", "response", "action", "remediation",
-       "workflow", "trigger", "script"], "Automation"),
-    (["platform", "api", "integration", "webhook", "sdk", "tenant",
-       "role", "permission", "operator", "read only", "rbac"], "Platform"),
-    (["msp", "multi-tenant", "managed service", "site", "cynet operator"], "MSP"),
-    (["email", "mail", "phishing", "spam", "smtp"], "Email"),
-    (["mobile", "ios", "android", "phone", "tablet"], "Mobile"),
-    (["on-prem", "on_prem", "onprem", "local", "offline"], "On-prem"),
-    (["report", "dashboard", "analytic", "chart", "export", "pdf",
-       "csv", "graph", "trend"], "Reports"),
-]
-
-def _map_domain(raw_domain: str, cluster_title: str = "") -> str:
-    """Map a raw Salesforce domain + cluster title to one of the 12 canonical domains."""
-    haystack = f"{raw_domain or ''} {cluster_title or ''}".lower()
-    for keywords, canonical in _DOMAIN_KEYWORDS:
-        if any(kw in haystack for kw in keywords):
-            return canonical
-    # If raw domain exactly matches one of the canonicals (case-insensitive), use it
-    for d in CANONICAL_DOMAINS:
-        if d.lower() == (raw_domain or "").lower():
-            return d
-    return raw_domain or "Other"
-
 
 # ── Server-side cluster HTML rendering (mirrors JS buildSignalRow / renderSignalTable)
 def _build_clusters_for_page(conn, run_id: str,  # noqa: C901
