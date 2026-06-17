@@ -14,3 +14,5 @@ nohup.out
 *.xlsx
 *.pptx
 ~$*
+# Local Claude Code settings (may contain tokens)
+.claude/settings.local.json
