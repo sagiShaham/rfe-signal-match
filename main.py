@@ -170,12 +170,13 @@ def tokenize(text: str) -> set:
     return {w for w in words if w not in STOP_WORDS}
 
 def basic_similarity(rfe1: dict, rfe2: dict) -> dict:
-    t1 = f"{rfe1.get('subject','') or ''} {rfe1.get('description','') or ''}"
-    t2 = f"{rfe2.get('subject','') or ''} {rfe2.get('description','') or ''}"
+    # Use subject only — more focused than full description for clustering
+    t1 = (rfe1.get('subject') or '').strip()
+    t2 = (rfe2.get('subject') or '').strip()
     w1, w2 = tokenize(t1), tokenize(t2)
     if not w1 or not w2: return {"score": 0.0, "reason": "Insufficient text.", "common": []}
     jaccard = len(w1 & w2) / len(w1 | w2)
-    seq = SequenceMatcher(None, t1[:500].lower(), t2[:500].lower()).ratio()
+    seq = SequenceMatcher(None, t1.lower(), t2.lower()).ratio()
     score = round(jaccard * 0.65 + seq * 0.35, 3)
     common = sorted(w1 & w2)[:7]
     reason = f"Shared key terms: {', '.join(common)}." if common else "Low lexical overlap."
@@ -228,6 +229,10 @@ def get_scoring_config() -> dict:
     cfg['threshold_medium'] = float(get_cfg('threshold_medium', '0.45'))
     cfg['similarity_threshold'] = float(get_cfg('SIMILARITY_THRESHOLD', '0.55'))
     cfg['high_confidence_threshold'] = float(get_cfg('HIGH_CONFIDENCE_THRESHOLD', '0.85'))
+    # Match status thresholds — minimum weighted score to claim each status
+    cfg['match_thresh_delivered']   = float(get_cfg('match_thresh_delivered',   '0.45'))
+    cfg['match_thresh_in_pi']       = float(get_cfg('match_thresh_in_pi',       '0.35'))
+    cfg['match_thresh_planned']     = float(get_cfg('match_thresh_planned',     '0.28'))
     return cfg
 
 # ─── Match status determination ───────────────────────────────────────────────
@@ -238,15 +243,15 @@ def determine_match_status(cluster_text: str, context_docs: list, cfg: dict) -> 
     if not tokens:
         return 'no_match', 'Insufficient text to match', {}
 
-    # Priority order with per-source minimum thresholds.
-    # Release Notes needs a stronger match (0.20) to claim "Delivered" — avoids
-    # a large doc with incidental keyword overlap stealing In-PI/Planned status.
+    t_del     = cfg.get('match_thresh_delivered', 0.45)
+    t_pi      = cfg.get('match_thresh_in_pi',     0.35)
+    t_planned = cfg.get('match_thresh_planned',   0.28)
     PRIORITY = [
-        ('release_notes',  'delivered',     'weight_release_notes',   0.45),
-        ('ado_current_pi', 'in_current_pi', 'weight_ado_current_pi',  0.12),
-        ('ado_backlog',    'planned',        'weight_ado_backlog',     0.10),
-        ('roadmap',        'planned',        'weight_roadmap',         0.10),
-        ('confluence',     'planned',        'weight_confluence_undated', 0.10),
+        ('release_notes',  'delivered',     'weight_release_notes',      t_del),
+        ('ado_current_pi', 'in_current_pi', 'weight_ado_current_pi',     t_pi),
+        ('ado_backlog',    'planned',        'weight_ado_backlog',        t_planned),
+        ('roadmap',        'planned',        'weight_roadmap',            t_planned),
+        ('confluence',     'planned',        'weight_confluence_undated', t_planned),
     ]
     breakdown = {}
 
@@ -473,9 +478,14 @@ async def score_run(run_id: str, job_id: str):  # noqa: C901
 
     mode_label = "Claude AI" if use_claude else "text similarity"
 
+    def _cluster_group_key(rfe):
+        domain = (rfe.get("domain") or "Unknown").strip()
+        sub    = (rfe.get("sub_domain") or "").strip()
+        return f"{domain}|{sub}" if sub else domain
+
     domain_groups: Dict[str, list] = defaultdict(list)
     for rfe in matched_rows:
-        domain_groups[rfe.get("domain") or "Unknown"].append(rfe)
+        domain_groups[_cluster_group_key(rfe)].append(rfe)
 
     rfe_index  = {rfe["id"]: i for i, rfe in enumerate(matched_rows)}
     uf         = UnionFind(len(matched_rows))
@@ -1504,7 +1514,7 @@ async def api_stats():
                    COALESCE(SUM(CASE WHEN match_status!='no_match' THEN json_array_length(member_case_numbers) ELSE 0 END),0) as matched_rfe_count
                    FROM rfe_clusters WHERE run_id=?""", (run_id,))
     s = dict(cur.fetchone())
-    cur.execute("SELECT rfe_count,status,source,filtered_rfe_count FROM run_meta WHERE run_id=?", (run_id,))
+    cur.execute("SELECT rfe_count,status,source,filtered_rfe_count,started_at,completed_at FROM run_meta WHERE run_id=?", (run_id,))
     meta = dict(cur.fetchone() or {})
     conn.close()
     return {**s, "run_id": run_id,
@@ -1512,6 +1522,8 @@ async def api_stats():
             "filtered_rfe_count": meta.get("filtered_rfe_count", 0),
             "run_status": meta.get("status", ""),
             "source": meta.get("source", ""),
+            "started_at": meta.get("started_at", ""),
+            "completed_at": meta.get("completed_at", ""),
             "anthropic_key_set": bool(os.getenv("ANTHROPIC_API_KEY", "").strip())}
 
 @app.get("/api/email-queue")

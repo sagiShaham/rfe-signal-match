@@ -452,7 +452,7 @@ function _nav(page) {
     } catch(e) {}
     try { loadStats(); } catch(e) {}
   }
-  if (page==='sources') { try{loadDocs();}catch(e){} }
+  if (page==='sources') { try{loadDocs();loadStats();}catch(e){} }
   if (page==='scoring') { try{loadScoringConfig();}catch(e){} }
 }
 // Keep navigate() as alias for legacy calls in JS body
@@ -508,25 +508,30 @@ function navigate(page) { _nav(page); }
 
       <!-- CSV Drop Zone -->
       <div style="margin-bottom:24px">
-        <div class="drop-zone" id="csv-drop-zone"
-             onclick="document.getElementById('csv-file-input').click()"
+        <div class="drop-zone" id="csv-drop-zone" style="position:relative;overflow:hidden"
+             onclick="if(!document.getElementById('csv-loading-overlay').style.display||document.getElementById('csv-loading-overlay').style.display==='none')document.getElementById('csv-file-input').click()"
              ondragover="event.preventDefault();this.classList.add('dragover')"
              ondragleave="this.classList.remove('dragover')"
              ondrop="handleCsvDrop(event)">
+          <!-- Loading overlay — shown during upload+scoring -->
+          <div id="csv-loading-overlay" style="display:none;position:absolute;inset:0;background:rgba(240,249,255,0.95);border-radius:var(--radius);z-index:10;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px">
+            <span class="spinner" style="width:28px;height:28px;border-width:3px;border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>
+            <div id="csv-overlay-label" style="font-size:14px;font-weight:700;color:var(--accent-dark)">Uploading…</div>
+            <div style="width:100%;max-width:420px">
+              <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:5px">
+                <span id="csv-overlay-sub" style="color:var(--text-muted)">Reading file…</span>
+                <span id="csv-overlay-pct" style="color:var(--accent)">0%</span>
+              </div>
+              <div style="background:#bfdbfe;border-radius:6px;height:8px;overflow:hidden">
+                <div id="csv-overlay-bar" style="height:100%;background:var(--accent);border-radius:6px;width:0%;transition:width .4s"></div>
+              </div>
+            </div>
+          </div>
           <div class="drop-zone-icon">📊</div>
           <div class="drop-zone-label">Drop your Salesforce Cases CSV here</div>
           <div class="drop-zone-sub">or click to browse · Supports any SF Cases export</div>
           <div id="csv-upload-status" style="margin-top:10px;font-size:13px"></div>
-          <div id="csv-inline-progress" style="display:none;margin-top:14px;width:100%;max-width:500px">
-            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:5px">
-              <span id="csv-inline-label">Processing…</span>
-              <span id="csv-inline-pct" style="color:var(--accent)">0%</span>
-            </div>
-            <div style="background:#e2e8f0;border-radius:6px;height:8px;overflow:hidden">
-              <div id="csv-inline-bar" style="height:100%;background:var(--accent);border-radius:6px;width:0%;transition:width .4s"></div>
-            </div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:5px" id="csv-inline-sub">Comparing RFEs within each product domain…</div>
-          </div>
+          <div id="csv-last-updated" style="margin-top:6px;font-size:11px;color:var(--text-muted)"></div>
         </div>
         <input type="file" id="csv-file-input" accept=".csv" onchange="handleCsvFile(this.files[0])"/>
       </div>
@@ -619,7 +624,7 @@ function navigate(page) { _nav(page); }
       <!-- Loaded docs -->
       <div id="docs-section" style="display:none">
         <div class="section-header"><h2>Loaded context documents</h2>
-          <button class="btn btn-ghost" style="font-size:12px" onclick="loadDocs()">↺ Refresh</button>
+          <button class="btn btn-ghost" style="font-size:12px" id="btn-refresh-docs" onclick="refreshDocs()">↺ Refresh</button>
         </div>
         <div class="docs-list" id="docs-list"></div>
       </div>
@@ -677,7 +682,8 @@ function navigate(page) { _nav(page); }
           <button class="group-toggle-btn" id="grp-customer" onclick="setGroupBy('customer',this)">By Customer</button>
         </div>
         <span style="color:var(--border)">|</span>
-        <button class="filter-btn active" id="filter-all" onclick="setFilter('all',this)">All</button>
+        <button class="filter-btn" id="filter-all" onclick="setFilter('all',this)">All</button>
+        <button class="filter-btn active" id="filter-conf-medplus" onclick="setConfFilter('medium+',this)">🟢🟡 Medium +</button>
         <button class="filter-btn" id="filter-conf-high" onclick="setConfFilter('high',this)">🟢 High</button>
         <button class="filter-btn" id="filter-conf-med" onclick="setConfFilter('medium',this)">🟡 Medium</button>
         <button class="filter-btn" id="filter-conf-low" onclick="setConfFilter('low',this)">🔴 Low</button>
@@ -800,10 +806,47 @@ function navigate(page) { _nav(page); }
 
       <!-- Thresholds -->
       <div class="config-section">
-        <h3>🎚 Similarity Thresholds</h3>
+        <h3>🎯 Match Status Thresholds</h3>
+        <div class="info-box">These control which RFEs appear in Signal Match. Raise them to reduce false positives. After saving, click <strong>⚡ Re-score</strong> on the Signal Match page.</div>
         <div class="threshold-grid">
           <div class="threshold-card">
-            <div class="threshold-name">🔴 High Confidence</div>
+            <div class="threshold-name" style="color:#15803d">✅ Delivered threshold</div>
+            <div class="threshold-desc">Minimum Release Notes score to mark as Delivered</div>
+            <div class="threshold-val" id="val-thresh-delivered" style="color:#15803d">0.45</div>
+            <input type="range" min="0.2" max="0.8" step="0.05" id="slider-thresh-delivered" style="width:100%;accent-color:#15803d;margin-top:8px"
+              oninput="document.getElementById('val-thresh-delivered').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.2 (loose)</span><span>0.8 (strict)</span></div>
+          </div>
+          <div class="threshold-card">
+            <div class="threshold-name" style="color:#1d4ed8">🏃 In Current PI threshold</div>
+            <div class="threshold-desc">Minimum ADO Current PI score to mark as In PI</div>
+            <div class="threshold-val" id="val-thresh-in-pi" style="color:#1d4ed8">0.35</div>
+            <input type="range" min="0.1" max="0.7" step="0.05" id="slider-thresh-in-pi" style="width:100%;accent-color:#1d4ed8;margin-top:8px"
+              oninput="document.getElementById('val-thresh-in-pi').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.1 (loose)</span><span>0.7 (strict)</span></div>
+          </div>
+          <div class="threshold-card">
+            <div class="threshold-name" style="color:#92400e">🗓 Planned threshold</div>
+            <div class="threshold-desc">Minimum score (Roadmap / Confluence / ADO Backlog) to mark as Planned</div>
+            <div class="threshold-val" id="val-thresh-planned" style="color:#92400e">0.28</div>
+            <input type="range" min="0.1" max="0.7" step="0.05" id="slider-thresh-planned" style="width:100%;accent-color:#92400e;margin-top:8px"
+              oninput="document.getElementById('val-thresh-planned').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.1 (loose)</span><span>0.7 (strict)</span></div>
+          </div>
+          <div class="threshold-card">
+            <div class="threshold-name">🔗 RFE Clustering Threshold</div>
+            <div class="threshold-desc">Minimum subject similarity to group two RFEs together</div>
+            <div class="threshold-val" id="val-sim">0.55</div>
+            <input type="range" min="0.3" max="0.9" step="0.05" id="slider-sim" style="width:100%;accent-color:var(--accent);margin-top:8px"
+              oninput="document.getElementById('val-sim').textContent=parseFloat(this.value).toFixed(2)"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.3 (loose)</span><span>0.9 (strict)</span></div>
+          </div>
+        </div>
+
+        <h3 style="margin-top:24px">🎚 Confidence Band Thresholds</h3>
+        <div class="threshold-grid">
+          <div class="threshold-card">
+            <div class="threshold-name">🟢 High Confidence</div>
             <div class="threshold-desc">Clusters above this score are marked High</div>
             <div class="threshold-val" id="val-high-conf">0.75</div>
             <input type="range" min="0.5" max="1.0" step="0.05" id="slider-high-conf" style="width:100%;accent-color:var(--high);margin-top:8px"
@@ -817,14 +860,6 @@ function navigate(page) { _nav(page); }
             <input type="range" min="0.2" max="0.8" step="0.05" id="slider-med-conf" style="width:100%;accent-color:var(--med);margin-top:8px"
               oninput="document.getElementById('val-med-conf').textContent=parseFloat(this.value).toFixed(2)"/>
             <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.2</span><span>0.8</span></div>
-          </div>
-          <div class="threshold-card">
-            <div class="threshold-name">🔗 RFE Similarity Threshold</div>
-            <div class="threshold-desc">Minimum score to group two RFEs into the same cluster</div>
-            <div class="threshold-val" id="val-sim">0.55</div>
-            <input type="range" min="0.3" max="0.9" step="0.05" id="slider-sim" style="width:100%;accent-color:var(--accent);margin-top:8px"
-              oninput="document.getElementById('val-sim').textContent=parseFloat(this.value).toFixed(2)"/>
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted)"><span>0.3 (loose)</span><span>0.9 (strict)</span></div>
           </div>
           <div class="threshold-card">
             <div class="threshold-name">⚡ Scoring Method</div>
@@ -862,13 +897,13 @@ function navigate(page) { _nav(page); }
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let allClusters = (typeof window.__INITIAL_CLUSTERS__ !== 'undefined' && Array.isArray(window.__INITIAL_CLUSTERS__)) ? window.__INITIAL_CLUSTERS__ : [];
-let confFilter = 'all';   // 'all' | 'high' | 'medium' | 'low'
+let confFilter = 'medium+'; // 'all' | 'medium+' | 'high' | 'medium' | 'low'
 let statusFilter = 'all'; // 'all' | 'delivered' | 'in_current_pi' | 'planned' | 'no_match'
 let groupBy = 'domain';
 let currentRunId = (typeof window.__INITIAL_RUN_ID__ !== 'undefined') ? window.__INITIAL_RUN_ID__ : null;
 let pollingTimer = null;
 let currentJobId = null;
-let drawerClusterId = null;
+// drawerClusterId is declared in the <head> script (var) — reused here
 let cfPages = [];
 let cfSpaceKey = '';
 let isScoring = false;  // guard: prevents loadClusters from overwriting the scoring loader
@@ -1013,37 +1048,43 @@ function handleCsvDrop(e) {
   else toast('Please drop a .csv file', 'error');
 }
 
+function _showCsvOverlay(label, pct, sub) {
+  const overlay = document.getElementById('csv-loading-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.getElementById('csv-overlay-label').textContent = label;
+  document.getElementById('csv-overlay-pct').textContent = pct + '%';
+  document.getElementById('csv-overlay-bar').style.width = pct + '%';
+  if (sub) document.getElementById('csv-overlay-sub').textContent = sub;
+}
+function _hideCsvOverlay() {
+  const overlay = document.getElementById('csv-loading-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
 async function handleCsvFile(file) {
   if (!file) return;
   const zone = document.getElementById('csv-drop-zone');
   const status = document.getElementById('csv-upload-status');
 
-  function setProgress(label, pct, sub='') {
-    document.getElementById('csv-inline-progress').style.display = 'block';
-    document.getElementById('csv-inline-label').textContent = label;
-    document.getElementById('csv-inline-pct').textContent = pct + '%';
-    document.getElementById('csv-inline-bar').style.width = pct + '%';
-    if (sub) document.getElementById('csv-inline-sub').textContent = sub;
-  }
-
-  setProgress(`Uploading ${file.name}…`, 5, 'Reading file…');
-  status.innerHTML = `<span style="color:var(--accent)"><span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span> Uploading ${file.name}…</span>`;
+  _showCsvOverlay(`Uploading ${file.name}…`, 5, 'Reading file…');
+  status.innerHTML = '';
 
   const form = new FormData();
   form.append('file', file);
   try {
-    setProgress('Parsing CSV rows…', 15, 'Detecting columns and importing records…');
+    _showCsvOverlay('Parsing CSV rows…', 15, 'Detecting columns and importing records…');
     const res = await fetch('/api/import-csv', {method:'POST', body:form});
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     currentJobId = data.job_id;
     currentRunId = data.run_id;
-    setProgress(`Scoring ${data.rfe_count} RFEs…`, 20, 'Comparing RFEs for duplicates within each domain…');
-    status.innerHTML = `<span style="color:var(--success)">✅ ${data.rfe_count} RFEs imported — scoring in progress…</span>`;
+    _showCsvOverlay(`Scoring ${data.rfe_count} RFEs…`, 20, 'Comparing RFEs against context sources…');
+    status.innerHTML = `<span style="color:var(--success)">✅ ${data.rfe_count} RFEs imported</span>`;
     zone.style.borderColor = 'var(--success)';
     startPolling(data.job_id);
   } catch(e) {
-    document.getElementById('csv-inline-progress').style.display = 'none';
+    _hideCsvOverlay();
     status.innerHTML = `<span style="color:var(--high)">❌ ${e.message}</span>`;
     toast('Import failed: ' + e.message, 'error');
   }
@@ -1326,6 +1367,14 @@ async function deleteDoc(id) {
   loadDocs(); toast('Document removed');
 }
 
+async function refreshDocs() {
+  const btn = document.getElementById('btn-refresh-docs');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2);width:12px;height:12px;border-width:2px;vertical-align:middle;margin-right:4px"></span>Refreshing…'; }
+  await Promise.all([loadDocs(), loadStats()]);
+  if (btn) { btn.disabled = false; btn.innerHTML = '↺ Refresh'; }
+  toast('Refreshed', 'success');
+}
+
 // ─── Polling ──────────────────────────────────────────────────────────────────
 function startPolling(jobId) {
   clearInterval(pollingTimer);
@@ -1471,22 +1520,13 @@ async function pollStatus(jobId) {
     if (job.status === 'imported' || job.status === 'scoring') {
       const p = job.total_pairs > 0 ? Math.round(job.processed_pairs / job.total_pairs * 100) : 25;
       const pct = Math.max(p, 20);
-      const el = document.getElementById('csv-inline-progress');
-      if (el) {
-        el.style.display = 'block';
-        document.getElementById('csv-inline-bar').style.width = pct + '%';
-        document.getElementById('csv-inline-pct').textContent = pct + '%';
-        document.getElementById('csv-inline-label').textContent = job.message || 'Scoring…';
-      }
+      _showCsvOverlay(job.message || 'Scoring…', pct, 'Cross-referencing RFEs against context sources…');
       showScoringLoader(job.message || 'Scoring…', pct);
       showGlobalProgress(job.message || 'Scoring…', pct);
     } else if (job.status === 'done') {
       clearInterval(pollingTimer);
-      document.getElementById('csv-inline-bar').style.width = '100%';
-      document.getElementById('csv-inline-pct').textContent = '100%';
-      document.getElementById('csv-inline-label').textContent = '✅ ' + job.message;
-      document.getElementById('csv-inline-sub').textContent = 'Scoring complete — go to Signal Match →';
-      setTimeout(() => { document.getElementById('csv-inline-progress').style.display = 'none'; }, 3000);
+      _showCsvOverlay('✅ ' + job.message, 100, 'Scoring complete — go to Signal Match →');
+      setTimeout(() => { _hideCsvOverlay(); loadStats(); }, 2500);
       hideGlobalProgress();
       completeScoringPanel(job.message);
       const resBtn = document.getElementById('btn-rescore');
@@ -1497,7 +1537,7 @@ async function pollStatus(jobId) {
       hideScoringPanel(); // waits 1.8s then calls loadClusters()
     } else if (job.status === 'error') {
       clearInterval(pollingTimer);
-      document.getElementById('csv-inline-progress').style.display = 'none';
+      _hideCsvOverlay();
       hideGlobalProgress();
       isScoring = false;
       const resBtn = document.getElementById('btn-rescore');
@@ -1544,6 +1584,19 @@ async function loadStats() {
       arr >= 1e6 ? '$'+(arr/1e6).toFixed(1)+'M' :
       arr >= 1e3 ? '$'+(arr/1e3).toFixed(0)+'K' :
       arr > 0    ? '$'+arr.toFixed(0) : '—';
+
+    // Show last-updated timestamp in the CSV drop zone
+    const tsEl = document.getElementById('csv-last-updated');
+    if (tsEl) {
+      const ts = s.completed_at || s.started_at;
+      if (ts && s.rfe_count) {
+        const dt = new Date(ts.replace(' ', 'T') + (ts.includes('+') ? '' : 'Z'));
+        const formatted = isNaN(dt) ? ts.slice(0,16).replace('T',' ') :
+          dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) + ' ' +
+          dt.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+        tsEl.textContent = `Last updated: ${formatted}`;
+      }
+    }
   } catch(e) {}
 }
 
@@ -1581,12 +1634,16 @@ function setFilter(f, btn) {
 }
 
 function setConfFilter(f, btn) {
-  confFilter = confFilter === f ? 'all' : f;
+  confFilter = confFilter === f ? 'medium+' : f;
   statusFilter = 'all';
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('filter-all').classList.remove('active');
-  if (confFilter !== 'all') btn.classList.add('active');
-  else document.getElementById('filter-all').classList.add('active');
+  if (confFilter === 'all') {
+    document.getElementById('filter-all').classList.add('active');
+  } else if (confFilter === 'medium+') {
+    document.getElementById('filter-conf-medplus')?.classList.add('active');
+  } else {
+    btn.classList.add('active');
+  }
   renderSignalTable();
 }
 
@@ -1634,7 +1691,8 @@ function renderSignalTable() {
   }
 
   let filtered = matchedOnly.filter(c => {
-    if (confFilter !== 'all' && c.confidence_band !== confFilter) return false;
+    if (confFilter === 'medium+' && c.confidence_band === 'low') return false;
+    if (confFilter !== 'all' && confFilter !== 'medium+' && c.confidence_band !== confFilter) return false;
     if (statusFilter !== 'all' && c.match_status !== statusFilter) return false;
     if (domainSel) {
       const doms = (c.members||[]).map(m => m.domain).filter(Boolean);
@@ -1886,8 +1944,8 @@ function buildSignalRow(c) {
     // Status-matched source for this RFE
     const _mSrcPfx = {delivered:['release_notes'],in_current_pi:['ado_current_pi'],planned:['ado_backlog','roadmap','confluence']}[mMs]||[];
     const _mSrc = _mEntries.filter(([k]) => _mSrcPfx.some(p=>k.startsWith(p)))[0] || _mBest;
-    const _mSrcName = _mSrc ? _mSrc[0].split(‘|’)[1] || _mSrc[0].split(‘|’)[0] : null;
-    const _mSrcType = _mSrc ? _mSrc[0].split(‘|’)[0].replace(/_/g,’ ‘) : null;
+    const _mSrcName = _mSrc ? _mSrc[0].split('|')[1] || _mSrc[0].split('|')[0] : null;
+    const _mSrcType = _mSrc ? _mSrc[0].split('|')[0].replace(/_/g,' ') : null;
     const _mTip = [
       `Signal: ${_mSignalStr}`,
       _mSrc
@@ -1899,8 +1957,8 @@ function buildSignalRow(c) {
         + `&#10;(Higher = stronger match. 1.0 = full match)`
         : ``,
       `──────────────────────────────`,
-      `Grouped with ${members.length-1} similar RFE${members.length-1!==1?’s’:’’} (similarity ${(c.confidence_score||0).toFixed(2)})`,
-    ].filter(Boolean).join(‘&#10;’);
+      `Grouped with ${members.length-1} similar RFE${members.length-1!==1?'s':''} (similarity ${(c.confidence_score||0).toFixed(2)})`,
+    ].filter(Boolean).join('&#10;');
     return `<div style="background:#f4f6f9;border-radius:6px;padding:8px 10px;margin-bottom:4px;transition:background .15s">
       <div style="display:grid;grid-template-columns:${_rfeGrid};gap:8px;align-items:center;font-size:12px">
         <span class="copy-case" onclick="copyCase(this,'${esc(caseId)}')" title="Click to copy" style="display:flex;align-items:center;justify-content:center;text-align:center">${esc(caseId)}</span>
@@ -2196,6 +2254,12 @@ async function loadScoringConfig() {
     document.getElementById('val-high-conf').textContent = (cfg.threshold_high || 0.75).toFixed(2);
     document.getElementById('slider-med-conf').value = cfg.threshold_medium || 0.45;
     document.getElementById('val-med-conf').textContent = (cfg.threshold_medium || 0.45).toFixed(2);
+    document.getElementById('slider-thresh-delivered').value = cfg.match_thresh_delivered ?? 0.45;
+    document.getElementById('val-thresh-delivered').textContent = (cfg.match_thresh_delivered ?? 0.45).toFixed(2);
+    document.getElementById('slider-thresh-in-pi').value = cfg.match_thresh_in_pi ?? 0.35;
+    document.getElementById('val-thresh-in-pi').textContent = (cfg.match_thresh_in_pi ?? 0.35).toFixed(2);
+    document.getElementById('slider-thresh-planned').value = cfg.match_thresh_planned ?? 0.28;
+    document.getElementById('val-thresh-planned').textContent = (cfg.match_thresh_planned ?? 0.28).toFixed(2);
     document.getElementById('slider-sim').value = cfg.similarity_threshold || 0.55;
     document.getElementById('val-sim').textContent = (cfg.similarity_threshold || 0.55).toFixed(2);
     document.getElementById('scoring-method-info').innerHTML = cfg.anthropic_key_set
@@ -2208,6 +2272,9 @@ async function saveScoringConfig() {
   const payload = { recency_decay: document.getElementById('toggle-recency').checked,
                     threshold_high: parseFloat(document.getElementById('slider-high-conf').value),
                     threshold_medium: parseFloat(document.getElementById('slider-med-conf').value),
+                    match_thresh_delivered: parseFloat(document.getElementById('slider-thresh-delivered').value),
+                    match_thresh_in_pi: parseFloat(document.getElementById('slider-thresh-in-pi').value),
+                    match_thresh_planned: parseFloat(document.getElementById('slider-thresh-planned').value),
                     similarity_threshold: parseFloat(document.getElementById('slider-sim').value) };
   WEIGHT_META.forEach(m => {
     const el = document.getElementById('w-' + m.key);
@@ -2233,6 +2300,14 @@ function resetScoringConfig() {
   document.getElementById('val-high-conf').textContent = '0.75';
   document.getElementById('slider-med-conf').value = 0.45;
   document.getElementById('val-med-conf').textContent = '0.45';
+  document.getElementById('slider-thresh-delivered').value = 0.45;
+  document.getElementById('val-thresh-delivered').textContent = '0.45';
+  document.getElementById('slider-thresh-in-pi').value = 0.35;
+  document.getElementById('val-thresh-in-pi').textContent = '0.35';
+  document.getElementById('slider-thresh-planned').value = 0.28;
+  document.getElementById('val-thresh-planned').textContent = '0.28';
+  document.getElementById('slider-sim').value = 0.55;
+  document.getElementById('val-sim').textContent = '0.55';
   toast('Reset to defaults');
 }
 
@@ -2270,19 +2345,14 @@ async function resumePollingIfActive() {
       isScoring = true;
       showGlobalProgress('Scoring in progress — please wait…', 50);
       showScoringLoader('Scoring in progress…', 50);
-      document.getElementById('csv-upload-status').innerHTML =
-        '<span style="color:var(--accent)">⏳ Scoring in progress…</span>';
-      document.getElementById('csv-inline-progress').style.display = 'block';
-      document.getElementById('csv-inline-label').textContent = 'Scoring RFEs…';
-      document.getElementById('csv-inline-pct').textContent = '~50%';
-      document.getElementById('csv-inline-bar').style.width = '50%';
+      _showCsvOverlay('Scoring in progress…', 50, 'Resuming — please wait…');
       const t = setInterval(async () => {
         const r2 = await fetch('/api/stats');
         const s2 = await r2.json();
         if (s2.run_status === 'scored') {
           clearInterval(t);
           hideGlobalProgress();
-          document.getElementById('csv-inline-progress').style.display = 'none';
+          _hideCsvOverlay();
           document.getElementById('csv-upload-status').innerHTML =
             `<span style="color:var(--success)">✅ Scoring complete — ${s2.total||0} clusters found</span>`;
           toast(`Scoring complete — ${s2.total||0} clusters found`, 'success');
