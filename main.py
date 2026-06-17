@@ -1116,6 +1116,9 @@ class ScoringConfigUpdate(BaseModel):
     threshold_medium: Optional[float] = None
     similarity_threshold: Optional[float] = None
     high_confidence_threshold: Optional[float] = None
+    match_thresh_delivered: Optional[float] = None
+    match_thresh_in_pi: Optional[float] = None
+    match_thresh_planned: Optional[float] = None
 
 @app.put("/api/scoring-config")
 async def update_scoring_config(cfg: ScoringConfigUpdate):
