@@ -162,12 +162,27 @@ STOP_WORDS = {
     "will","would","could","should","may","might","can","this","that","these",
     "those","it","its","we","our","they","their","as","by","from","not","no",
     "request","feature","ability","option","support","add","allow","enable",
-    "provide","need","want","customer","user","please","would like"
+    "provide","need","want","customer","user","please","would like",
+    "rfe","via","per","use","get","set","see","new","also","when","then",
+    "what","how","all","any","out","just","more","into","like","yet"
 }
+
+def stem(word: str) -> str:
+    """Conservative suffix-stripping — normalises plurals and gerunds."""
+    if len(word) < 4:
+        return word
+    if word.endswith('ing') and len(word) > 6:
+        return word[:-3]
+    # Strip trailing -s but guard against Latin-origin words (status, analysis, virus)
+    if (word.endswith('s') and not word.endswith('ss')
+            and not word.endswith('is') and not word.endswith('us')
+            and len(word) >= 4):
+        return word[:-1]
+    return word
 
 def tokenize(text: str) -> set:
     words = re.findall(r'\b[a-z]{3,}\b', (text or "").lower())
-    return {w for w in words if w not in STOP_WORDS}
+    return {stem(w) for w in words if w not in STOP_WORDS}
 
 def basic_similarity(rfe1: dict, rfe2: dict) -> dict:
     # Use subject only — more focused than full description for clustering
@@ -290,6 +305,41 @@ def determine_match_status(cluster_text: str, context_docs: list, cfg: dict) -> 
             return status_label, reason, breakdown
 
     return 'no_match', 'No match found in any context source', breakdown
+
+def _description_rescue(desc_text: str, context_docs: list) -> tuple:
+    """Secondary scoring pass on description text using raw containment (no weight multiplier).
+    Called only when subject-only scoring returned no_match and description has ≥15 tokens.
+    Uses lower raw-containment thresholds since descriptions are verbose and noisy."""
+    tokens = tokenize(desc_text)
+    if len(tokens) < 15:
+        return 'no_match', '', {}
+
+    # Raw containment thresholds (no doc weight applied — bypasses the weight ceiling problem)
+    RAW_THRESHOLDS = [
+        ('release_notes',  'delivered',     0.30),
+        ('ado_current_pi', 'in_current_pi', 0.25),
+        ('ado_backlog',    'planned',        0.20),
+        ('roadmap',        'planned',        0.20),
+        ('confluence',     'planned',        0.20),
+    ]
+    breakdown = {}
+    for doc_type, status_label, raw_thresh in RAW_THRESHOLDS:
+        type_docs = [d for d in context_docs if d['doc_type'] == doc_type]
+        for doc in type_docs:
+            content = (doc.get('content') or '')[:20000]
+            doc_tokens = tokenize(content)
+            if not doc_tokens:
+                continue
+            intersection = len(tokens & doc_tokens)
+            raw_containment = intersection / max(len(tokens), 1)
+            key = f"{doc_type}|{doc['title'][:40]}"
+            breakdown[key] = max(breakdown.get(key, 0), raw_containment)
+            if raw_containment >= raw_thresh:
+                reason = (f"[desc] Matched '{doc['title'][:50]}' "
+                          f"(raw containment {raw_containment:.2f})")
+                return status_label, reason, breakdown
+
+    return 'no_match', '', breakdown
 
 # ─── Confidence sentence ──────────────────────────────────────────────────────
 
@@ -436,8 +486,16 @@ async def score_run(run_id: str, job_id: str):  # noqa: C901
     matched_rows: list = []            # only RFEs that scored above any threshold
 
     for i, rfe in enumerate(rows):
-        rfe_text = f"{rfe.get('subject','') or ''} {(rfe.get('description') or '')[:500]}"
-        m_status, m_reason, m_bd = determine_match_status(rfe_text, ctx_docs, scoring_cfg)
+        # Phase 1a: score subject only — avoids description diluting containment ratio
+        subj_text = rfe.get('subject', '') or ''
+        m_status, m_reason, m_bd = determine_match_status(subj_text, ctx_docs, scoring_cfg)
+
+        # Phase 1b: description rescue — if subject had no match but description is rich
+        if m_status == 'no_match':
+            desc_text = (rfe.get('description') or '')[:1000]
+            r_status, r_reason, r_bd = _description_rescue(desc_text, ctx_docs)
+            if r_status != 'no_match':
+                m_status, m_reason, m_bd = r_status, r_reason, r_bd
         signal = max(m_bd.values()) if m_bd else 0.0
         rfe_scores[rfe["id"]] = {
             "match_status":  m_status,
