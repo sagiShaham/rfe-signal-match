@@ -1382,23 +1382,23 @@ function startPolling(jobId) {
 }
 
 const SCORING_STEPS = [
-  {icon:'🔍', label:'Reading RFE subjects & descriptions'},
-  {icon:'🔑', label:'Building keyword index from context sources'},
-  {icon:'⚡', label:'Pass 1 — keyword pre-filter'},
-  {icon:'🧠', label:'Pass 2 — semantic scoring candidates'},
-  {icon:'🏷️', label:'Assigning Delivered / In PI / Planned status'},
+  {icon:'📥', label:'Loading RFEs & context corpus'},
+  {icon:'🔢', label:'Embedding context chunks (GPU)'},
+  {icon:'🔍', label:'Vector recall — bi-encoder matching'},
+  {icon:'⚡', label:'Cross-encoder reranking (GPU)'},
+  {icon:'🗂️', label:'Clustering matched RFEs'},
   {icon:'✍️', label:'Generating cluster summaries'},
 ];
 let scoringStepTimer = null;
 
-// Map actual progress % to the right step label — no random cycling
+// Map actual combined progress % (Phase 1 = 0–75%, Phase 2 = 75–100%)
 function getScoringStep(pct) {
-  if (pct < 12) return SCORING_STEPS[0]; // Reading RFEs
-  if (pct < 28) return SCORING_STEPS[1]; // Building keyword index
-  if (pct < 55) return SCORING_STEPS[2]; // Pass 1 pre-filter
-  if (pct < 82) return SCORING_STEPS[3]; // Pass 2 semantic scoring
-  if (pct < 96) return SCORING_STEPS[4]; // Assigning status
-  return SCORING_STEPS[5];               // Generating summaries
+  if (pct <  5) return SCORING_STEPS[0]; // Loading
+  if (pct < 10) return SCORING_STEPS[1]; // Embedding
+  if (pct < 20) return SCORING_STEPS[2]; // Vector recall
+  if (pct < 75) return SCORING_STEPS[3]; // Cross-encoder reranking
+  if (pct < 96) return SCORING_STEPS[4]; // Clustering
+  return SCORING_STEPS[5];               // Summaries
 }
 function updateScoringStepLabel(pct) {
   const el = document.getElementById('scoring-step-label');
@@ -1408,15 +1408,15 @@ function updateScoringStepLabel(pct) {
 }
 function stopScoringStepAnimation() { clearInterval(scoringStepTimer); }
 
-function showScoringLoader(msg, pct) {
+function showScoringLoader(msg, pct, jobStatus) {
   const container = document.getElementById('signal-table-container');
   if (!container) return;
 
-  const isPass1 = msg && msg.toLowerCase().includes('pre-filter');
-  const isPass2 = msg && (msg.toLowerCase().includes('scoring candidate') || msg.toLowerCase().includes('semantic'));
-  const isDone  = pct >= 100;
+  const isPhase1 = !jobStatus || jobStatus === 'scoring' || jobStatus === 'imported';
+  const isPhase2 = jobStatus === 'clustering';
+  const isDone   = pct >= 100;
 
-  const step1Done = isPass2 || isDone;
+  const step1Done = isPhase2 || isDone;
   const step2Done = isDone;
 
   const stepStyle = (active, done) => {
@@ -1460,18 +1460,18 @@ function showScoringLoader(msg, pct) {
         <div style="width:48px;height:48px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">${isDone ? '✅' : '⚡'}</div>
         <div>
           <div style="font-size:16px;font-weight:700;margin-bottom:3px">${isDone ? 'Scoring complete' : 'Scoring in progress…'}</div>
-          <div style="font-size:12px;color:var(--text-muted)">Cross-referencing 1,458 RFEs against loaded context sources</div>
+          <div style="font-size:12px;color:var(--text-muted)">GPU-accelerated vector scoring · bi-encoder + cross-encoder reranking</div>
         </div>
       </div>
 
       <div style="display:flex;gap:0;margin-bottom:24px">
-        <div style="flex:1;padding:10px 16px;border-radius:7px 0 0 7px;border:1px solid;transition:all .3s;${stepStyle(isPass1 && !isDone, step1Done)}">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px">Pass 1</div>
-          <div style="font-size:12px;font-weight:600">${step1Done?'✓ ':''}Keyword pre-filter</div>
+        <div style="flex:1;padding:10px 16px;border-radius:7px 0 0 7px;border:1px solid;transition:all .3s;${stepStyle(isPhase1 && !isDone, step1Done)}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px">Phase 1</div>
+          <div style="font-size:12px;font-weight:600">${step1Done?'✓ ':''}Vector recall + reranking</div>
         </div>
-        <div style="flex:1;padding:10px 16px;border-radius:0 7px 7px 0;border:1px solid;border-left:none;transition:all .3s;${stepStyle(isPass2 && !isDone, step2Done)}">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px">Pass 2</div>
-          <div style="font-size:12px;font-weight:600">${step2Done?'✓ ':''}Semantic scoring</div>
+        <div style="flex:1;padding:10px 16px;border-radius:0 7px 7px 0;border:1px solid;border-left:none;transition:all .3s;${stepStyle(isPhase2 && !isDone, step2Done)}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px">Phase 2</div>
+          <div style="font-size:12px;font-weight:600">${step2Done?'✓ ':''}Clustering matched RFEs</div>
         </div>
       </div>
 
@@ -1517,11 +1517,19 @@ async function pollStatus(jobId) {
     const res = await fetch(`/api/status/${jobId}`);
     if (!res.ok) return;
     const job = await res.json();
-    if (job.status === 'imported' || job.status === 'scoring') {
-      const p = job.total_pairs > 0 ? Math.round(job.processed_pairs / job.total_pairs * 100) : 25;
-      const pct = Math.max(p, 20);
+    if (job.status === 'imported' || job.status === 'scoring' || job.status === 'clustering') {
+      let pct;
+      if (job.status === 'clustering') {
+        // Phase 2 occupies 75–100% of the combined bar
+        const p = job.total_pairs > 0 ? Math.round(job.processed_pairs / job.total_pairs * 25) : 2;
+        pct = 75 + p;
+      } else {
+        // Phase 1 occupies 0–75%
+        const p = job.total_pairs > 0 ? Math.round(job.processed_pairs / job.total_pairs * 75) : 0;
+        pct = Math.max(p, 3);
+      }
       _showCsvOverlay(job.message || 'Scoring…', pct, 'Cross-referencing RFEs against context sources…');
-      showScoringLoader(job.message || 'Scoring…', pct);
+      showScoringLoader(job.message || 'Scoring…', pct, job.status);
       showGlobalProgress(job.message || 'Scoring…', pct);
     } else if (job.status === 'done') {
       clearInterval(pollingTimer);

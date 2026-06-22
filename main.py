@@ -1,4 +1,5 @@
 import os, io, csv, json, uuid, asyncio, sqlite3, itertools, re, threading
+import datetime as _dt
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -111,12 +112,136 @@ def migrate_db():
         "ALTER TABLE rfe_clusters ADD COLUMN score_breakdown TEXT",
         "ALTER TABLE rfe_clusters ADD COLUMN confidence_sentence TEXT",
         "ALTER TABLE context_docs ADD COLUMN doc_date TEXT",
+        # v2 scoring: per-RFE match results table
+        """CREATE TABLE IF NOT EXISTS matches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            rfe_id INTEGER,
+            case_number TEXT,
+            status TEXT,
+            confidence TEXT,
+            probability REAL,
+            source TEXT,
+            evidence TEXT,
+            epic_id TEXT,
+            reason TEXT,
+            secondary_status TEXT,
+            all_scores TEXT,
+            scored_at TEXT
+        )""",
     ]:
         try: conn.execute(sql)
         except sqlite3.OperationalError: pass
     conn.commit(); conn.close()
 
 init_db(); migrate_db()
+
+# ── v2 pipeline bootstrap ─────────────────────────────────────────────────────
+try:
+    from scoring.v2_pipeline import load_config_from_db as _v2_load_config
+    _v2_load_config(DB_PATH)
+except Exception:
+    pass
+
+try:
+    from scoring.vector_store import init_vector_table as _v2_init_vec
+    _v2_init_vec(DB_PATH)
+except Exception:
+    pass
+
+# ─── v2 DB helpers ────────────────────────────────────────────────────────────
+
+def load_context_chunks_from_db(db_path: str) -> list:
+    """Load context_docs as v2 ContextChunk objects, with in-memory embeddings (None until embedded)."""
+    from scoring.v2_pipeline import ContextChunk
+    DOC_TYPE_MAP = {
+        'release_notes': 'release_notes',
+        'ado_current_pi': 'ado_current_pi',
+        'ado_backlog': 'ado_upcoming_pi',
+        'roadmap': 'roadmap',
+    }
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT id, doc_type, title, content, imported_at, doc_date FROM context_docs"
+    ).fetchall()
+    conn.close()
+
+    chunks = []
+    for row in rows:
+        doc_id, doc_type, title, content, imported_at_str, doc_date_str = row
+        src = DOC_TYPE_MAP.get(doc_type)
+        if doc_type == 'confluence':
+            src = 'confluence_dated' if doc_date_str else 'confluence_undated'
+        if src is None:
+            continue
+        text = (content or '')[:3000].strip()
+        if not text:
+            continue
+        try:
+            imported_at = _dt.datetime.fromisoformat((imported_at_str or '')[:19]).date()
+        except Exception:
+            imported_at = _dt.date.today()
+        epic_id = None
+        if doc_type in ('ado_current_pi', 'ado_backlog'):
+            m = re.search(r'#(\d+)$', title or '')
+            if m:
+                epic_id = m.group(1)
+        chunks.append(ContextChunk(
+            chunk_id=str(doc_id),
+            source=src,
+            text=text,
+            imported_at=imported_at,
+            epic_id=epic_id,
+        ))
+    return chunks
+
+
+def load_rfes_from_db(db_path: str, run_id: str = None) -> list:
+    """Load RFEs as v2 RFE objects for the given run_id (or most recent run)."""
+    from scoring.v2_pipeline import RFE as RFEV2
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    if not run_id:
+        row = conn.execute("SELECT run_id FROM run_meta ORDER BY started_at DESC LIMIT 1").fetchone()
+        run_id = row["run_id"] if row else None
+    if not run_id:
+        conn.close()
+        return []
+    rows = conn.execute(
+        "SELECT case_number, subject, description, domain, sub_domain FROM rfe_pulls WHERE run_id=?",
+        (run_id,)
+    ).fetchall()
+    conn.close()
+    return [
+        RFEV2(
+            case_number=r["case_number"] or '',
+            subject=r["subject"] or '',
+            description=r["description"] or '',
+            domain=r["domain"],
+            sub_domain=r["sub_domain"],
+        )
+        for r in rows
+    ]
+
+
+def save_results_to_db(db_path: str, run_id: str, results: list) -> None:
+    """Persist v2 MatchResult objects to the matches table."""
+    conn = sqlite3.connect(db_path)
+    scored_at = datetime.utcnow().isoformat()
+    conn.executemany(
+        """INSERT INTO matches
+           (run_id, case_number, status, confidence, probability, source,
+            evidence, epic_id, reason, secondary_status, all_scores, scored_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        [
+            (run_id, r.case_number, r.status, r.confidence, r.probability,
+             r.source, r.evidence, r.epic_id, r.reason,
+             r.secondary_status, json.dumps(r.all_scores), scored_at)
+            for r in results
+        ]
+    )
+    conn.commit()
+    conn.close()
 
 # ─── CSV column detection ─────────────────────────────────────────────────────
 
@@ -477,40 +602,103 @@ async def score_run(run_id: str, job_id: str):  # noqa: C901
     med_thr      = scoring_cfg.get('threshold_medium', 0.45)
     total        = len(rows)
 
-    # ── PHASE 1: Score every RFE individually against context docs ─────────────
+    # ── PHASE 1: v2 semantic scoring ───────────────────────────────────────────
     jobs[job_id].update(status="scoring",
-                        message=f"Phase 1 of 2 — Scoring {total} RFEs against context… 0 / {total}",
+                        message=f"Phase 1 of 2 — v2 semantic scoring: embedding corpus…",
                         total_pairs=total, processed_pairs=0)
 
-    rfe_scores: Dict[int, dict] = {}   # rfe_id → {match_status, match_reason, ctx_breakdown, signal_score}
-    matched_rows: list = []            # only RFEs that scored above any threshold
+    rfe_scores: Dict[int, dict] = {}
+    matched_rows: list = []
 
-    for i, rfe in enumerate(rows):
-        # Phase 1a: score subject only — avoids description diluting containment ratio
-        subj_text = rfe.get('subject', '') or ''
-        m_status, m_reason, m_bd = determine_match_status(subj_text, ctx_docs, scoring_cfg)
+    try:
+        from scoring.v2_pipeline import (
+            RFE as RFEV2, embed_corpus as v2_embed_corpus,
+            score_rfes_cascade, JUDGE_AVAILABLE,
+        )
+        corpus = load_context_chunks_from_db(DB_PATH)
+        if corpus:
+            jobs[job_id].update(message=f"Phase 1 of 2 — Embedding {len(corpus)} context chunks…")
+            v2_embed_corpus(corpus)
 
-        # Phase 1b: description rescue — if subject had no match but description is rich
-        if m_status == 'no_match':
-            desc_text = (rfe.get('description') or '')[:1000]
-            r_status, r_reason, r_bd = _description_rescue(desc_text, ctx_docs)
-            if r_status != 'no_match':
-                m_status, m_reason, m_bd = r_status, r_reason, r_bd
-        signal = max(m_bd.values()) if m_bd else 0.0
-        rfe_scores[rfe["id"]] = {
-            "match_status":  m_status,
-            "match_reason":  m_reason,
-            "ctx_breakdown": m_bd,
-            "signal_score":  signal,
-        }
-        if m_status != "no_match":
-            matched_rows.append(rfe)
-        if (i + 1) % 100 == 0 or i == total - 1:
-            jobs[job_id].update(
-                processed_pairs=i + 1,
-                message=(f"Phase 1 of 2 — Scoring RFEs… {i+1} / {total} "
-                         f"({len(matched_rows)} matched so far)"),
+        mode_v2 = "v2+judge" if JUDGE_AVAILABLE else "v2+rerank"
+
+        rfe_objs = [
+            RFEV2(
+                case_number=rfe.get('case_number', '') or '',
+                subject=rfe.get('subject', '') or '',
+                description=rfe.get('description', '') or '',
+                domain=rfe.get('domain'),
+                sub_domain=rfe.get('sub_domain'),
             )
+            for rfe in rows
+        ]
+
+        def _progress(stage: str, done: int, tot: int):
+            # Throttle UI updates: every 50 reranks, or every judged item.
+            if stage == "rerank":
+                if done % 50 and done != tot:
+                    return
+                jobs[job_id].update(
+                    processed_pairs=done,
+                    message=f"Phase 1 of 2 — Reranking RFEs… {done} / {tot} ({mode_v2})")
+            else:  # judge
+                jobs[job_id].update(
+                    message=f"Phase 1 of 2 — LLM judging shortlist… {done} / {tot}")
+
+        results_list = score_rfes_cascade(rfe_objs, corpus, _progress) if corpus else [None] * total
+
+        v2_results: list = []
+        for rfe, result in zip(rows, results_list):
+            if result and result.status != "no_match":
+                m_status   = result.status
+                m_reason   = result.evidence[:120] if result.evidence else result.reason[:120]
+                m_bd       = {f"{result.source}|{result.source}": result.probability}
+                signal     = result.probability
+                v2_results.append(result)
+            else:
+                m_status = "no_match"
+                m_reason = result.reason if result else "No corpus loaded"
+                m_bd     = {}
+                signal   = result.probability if result else 0.0
+
+            rfe_scores[rfe["id"]] = {
+                "match_status":  m_status,
+                "match_reason":  m_reason,
+                "ctx_breakdown": m_bd,
+                "signal_score":  signal,
+                "v2_result":     result,
+            }
+            if m_status != "no_match":
+                matched_rows.append(rfe)
+
+        # Persist v2 results to matches table
+        if v2_results:
+            save_results_to_db(DB_PATH, run_id, v2_results)
+
+    except Exception as _v2_err:
+        # Fallback to v1 if v2 pipeline fails (missing models, etc.)
+        jobs[job_id].update(message=f"v2 scoring unavailable ({_v2_err}), falling back to v1…")
+        for i, rfe in enumerate(rows):
+            subj_text = rfe.get('subject', '') or ''
+            m_status, m_reason, m_bd = determine_match_status(subj_text, ctx_docs, scoring_cfg)
+            if m_status == 'no_match':
+                desc_text = (rfe.get('description') or '')[:1000]
+                r_status, r_reason, r_bd = _description_rescue(desc_text, ctx_docs)
+                if r_status != 'no_match':
+                    m_status, m_reason, m_bd = r_status, r_reason, r_bd
+            signal = max(m_bd.values()) if m_bd else 0.0
+            rfe_scores[rfe["id"]] = {
+                "match_status": m_status, "match_reason": m_reason,
+                "ctx_breakdown": m_bd, "signal_score": signal, "v2_result": None,
+            }
+            if m_status != "no_match":
+                matched_rows.append(rfe)
+            if (i + 1) % 100 == 0 or i == total - 1:
+                jobs[job_id].update(
+                    processed_pairs=i + 1,
+                    message=(f"Phase 1 of 2 — Scoring RFEs… {i+1} / {total} "
+                             f"({len(matched_rows)} matched so far)"),
+                )
 
     # Persist how many were filtered out
     conn2 = get_db()
@@ -659,6 +847,8 @@ async def score_run(run_id: str, job_id: str):  # noqa: C901
             doc_name = best_k.split("|")[-1]
             match_reason = f"Matched '{doc_name}' (signal {ctx_breakdown[best_k]:.2f})"
 
+        # Include v2 scoring data from the best-matched member
+        v2_data = rfe_scores.get(best_mm["id"], {}).get("v2_result")
         score_breakdown = json.dumps({
             "similarity_reason": (sim_data.get("reason", "Individual context match")
                                   if is_solo else
@@ -671,6 +861,9 @@ async def score_run(run_id: str, job_id: str):  # noqa: C901
             "domains":           list({m.get("domain", "") for m in members if m.get("domain")}),
             "member_matches":    member_matches,
             "solo":              is_solo,
+            "evidence":          v2_data.evidence if v2_data else "",
+            "secondary_status":  v2_data.secondary_status if v2_data else None,
+            "all_scores":        v2_data.all_scores if v2_data else {},
         })
 
         confidence_sentence = generate_confidence_sentence(
