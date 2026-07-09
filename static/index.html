@@ -169,6 +169,8 @@ input[type=file]{display:none}
 .email-field label{display:block;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
 .email-field .val{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;font-size:13px;width:100%;white-space:pre-wrap;line-height:1.6;min-height:40px}
 .email-textarea{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;font-size:13px;width:100%;line-height:1.6;min-height:140px;resize:vertical;outline:none;font-family:inherit}
+.email-input{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:8px 12px;font-size:13px;width:100%;outline:none;font-family:inherit;color:var(--text)}
+.email-input:focus,.email-textarea:focus{border-color:var(--accent)}
 .email-textarea:focus{border-color:var(--accent)}
 
 /* Scoring Config */
@@ -338,8 +340,9 @@ async function _renderEmailContent(clusterId, memberId) {
       '<strong style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
       esc(email.rfe_subject || (cluster && cluster.cluster_title) || 'Cluster') + '</strong>' +
       _emailStatusBadge(ms) + '</div>' +
-      '<div class="email-field"><label>To</label><div class="val" id="email-to">' + esc(email.to||'—') + '</div></div>' +
-      '<div class="email-field"><label>Subject</label><div class="val" id="email-subject">' + esc(email.subject||'—') + '</div></div>' +
+      '<div class="email-field"><label>To (customer contact)</label><input class="email-input" id="email-to" placeholder="customer@company.com" value="' + esc(_isEmailAddr(email.to) ? email.to : '') + '"></div>' +
+      '<div class="email-field"><label>CC (CSM / stakeholders)</label><input class="email-input" id="email-cc" placeholder="csm@cynet.com; pm@cynet.com"></div>' +
+      '<div class="email-field"><label>Subject</label><input class="email-input" id="email-subject" value="' + esc(email.subject||'') + '"></div>' +
       '<div class="email-field"><label>Body</label><textarea class="email-textarea" id="email-body">' + esc(email.body||'—') + '</textarea></div>' +
       (email._template
         ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">⚡ Template email · add ANTHROPIC_API_KEY for AI-generated emails</div>'
@@ -356,14 +359,98 @@ function closeEmailDrawer() {
   drawerClusterId = null;
 }
 
+function _isEmailAddr(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s||'').trim()); }
+
+function _readEmailFields() {
+  return {
+    to:      (document.getElementById('email-to')?.value      || '').trim(),
+    cc:      (document.getElementById('email-cc')?.value      || '').trim(),
+    subject: (document.getElementById('email-subject')?.value || '').trim(),
+    body:    (document.getElementById('email-body')?.value    || '')
+  };
+}
+
 function copyEmailToClipboard() {
-  var to   = (document.getElementById('email-to')?.textContent   || '');
-  var subj = (document.getElementById('email-subject')?.textContent || '');
-  var body = (document.getElementById('email-body')?.value        || '');
-  var text = 'To: ' + to + '\nSubject: ' + subj + '\n\n' + body;
+  var f = _readEmailFields();
+  var text = 'To: ' + f.to + (f.cc ? '\nCC: ' + f.cc : '') + '\nSubject: ' + f.subject + '\n\n' + f.body;
   navigator.clipboard.writeText(text)
     .then(function()  { _toast('Email copied to clipboard ✅', 'success'); })
     .catch(function() { _toast('Copy failed — try manual select', 'error'); });
+}
+
+async function sendEmailFromDrawer() {
+  var f = _readEmailFields();
+  if (!f.to || !_isEmailAddr(f.to.split(';')[0])) {
+    _toast('Enter a valid recipient email in the To field', 'error');
+    document.getElementById('email-to')?.focus();
+    return;
+  }
+  var btn = document.getElementById('btn-send-email');
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    var cluster = _getClusters().find(function(c){ return c.id === drawerClusterId; });
+    var member = cluster && cluster.members && cluster.members[0];
+    var payload = {
+      cluster_id: drawerClusterId,
+      case_number: member ? member.case_number : null,
+      account_name: member ? member.account_name : null,
+      to: f.to, cc: f.cc || null, subject: f.subject, body: f.body
+    };
+    var res = await fetch('/api/send-email-smtp', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (res.status === 501) {
+      _toast('Direct send not configured yet — add SMTP_USER / SMTP_PASS to .env, or use "Outlook draft".', 'error');
+      return;
+    }
+    if (!res.ok) {
+      var err = await res.json().catch(function(){ return {detail: res.statusText}; });
+      throw new Error(err.detail || 'Send failed');
+    }
+    _toast('Email sent ✅', 'success');
+    closeEmailDrawer();
+  } catch(e) {
+    _toast('Send failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+function openInOutlook() {
+  var f = _readEmailFields();
+  if (!f.to || !_isEmailAddr(f.to.split(';')[0])) {
+    _toast('Enter a valid recipient email in the To field', 'error');
+    document.getElementById('email-to')?.focus();
+    return;
+  }
+  // mailto URLs are length-limited (~2000 chars) — copy the body as backup first
+  var url = 'mailto:' + encodeURIComponent(f.to)
+    + '?subject=' + encodeURIComponent(f.subject)
+    + (f.cc ? '&cc=' + encodeURIComponent(f.cc) : '')
+    + '&body=' + encodeURIComponent(f.body);
+  if (url.length > 1900) {
+    navigator.clipboard.writeText(f.body).catch(function(){});
+    url = url.slice(0, url.indexOf('&body=')) +
+      '&body=' + encodeURIComponent('[Body copied to clipboard — paste it here (Ctrl+V)]');
+    _toast('Long email — body copied to clipboard, paste it into the draft 📋', 'info');
+  }
+  // Audit log (fire-and-forget)
+  var cluster = _getClusters().find(function(c){ return c.id === drawerClusterId; });
+  var member = cluster && cluster.members && cluster.members[0];
+  fetch('/api/log-email', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      cluster_id: drawerClusterId,
+      case_number: member ? member.case_number : null,
+      account_name: member ? member.account_name : null,
+      to: f.to, cc: f.cc || null, subject: f.subject, body: f.body,
+      via: 'outlook_draft'
+    })
+  }).catch(function(){});
+  window.location.href = url;
+  _toast('Opening Outlook draft… review and hit Send ✉️', 'success');
 }
 
 // ── Search clusters (Case ID, subject, keyword — debounced, server-side) ──────
@@ -432,14 +519,14 @@ function copyMatchedId(el, text) {
 
 // ── Navigation — defined in <head> so it's ALWAYS available before body renders ──
 function _nav(page) {
-  var pages = ['sources','signal','scoring'];
+  var pages = ['sources','signal','scoring','pi-report'];
   for (var i=0; i<pages.length; i++) {
     var el = document.getElementById('page-'+pages[i]);
     if (el) el.style.display = (pages[i]===page) ? 'block' : 'none';
     var nav = document.querySelector('[data-page="'+pages[i]+'"]');
     if (nav) { nav.classList.toggle('active', pages[i]===page); }
   }
-  var titles = {sources:'Data Sources', signal:'Signal Match', scoring:'Scoring Config'};
+  var titles = {sources:'Data Sources', signal:'Signal Match', scoring:'Scoring Config', 'pi-report':'PI Report'};
   var titleEl = document.getElementById('page-title');
   if (titleEl) titleEl.textContent = titles[page] || page;
   if (page==='signal') {
@@ -487,7 +574,13 @@ function navigate(page) { _nav(page); }
     Scoring Config
   </a>
 
-  <div class="sidebar-footer">v2.0 · Cynet PM Tools</div>
+  <a class="nav-item" data-page="pi-report" href="#pi-report" onclick="event.preventDefault();_nav('pi-report')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><polyline points="7 15 10 12 13 15 17 11"/></svg>
+    📊 PI Report
+    <span style="margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(251,191,36,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:4px;padding:1px 5px;line-height:1.5;text-transform:uppercase">Beta</span>
+  </a>
+
+  <div class="sidebar-footer">v2.1 · Cynet PM Tools</div>
 </nav>
 
 <!-- Main -->
@@ -611,13 +704,21 @@ function navigate(page) { _nav(page); }
           <div class="source-status empty" id="status-confluence">Not connected</div>
         </div>
 
-        <!-- SF Direct (Phase 2) -->
-        <div class="source-card disabled">
+        <!-- SF Direct pull -->
+        <div class="source-card">
           <div class="source-icon">☁️</div>
-          <div class="source-title">Salesforce API <span style="font-size:10px;background:#f1f5f9;padding:1px 5px;border-radius:8px;color:var(--text-muted)">Phase 2</span></div>
-          <div class="source-desc">Live SF integration — no CSV export needed</div>
-          <button class="btn btn-ghost btn-sm" disabled>Coming soon</button>
-          <div class="source-status empty">Phase 2</div>
+          <div class="source-title">Salesforce API <span style="font-size:10px;background:#fef3c7;padding:1px 5px;border-radius:8px;color:#92400e">Beta</span></div>
+          <div class="source-desc">Pull RFE cases live from Salesforce — no CSV export needed</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-muted)">Days back:</label>
+            <input type="number" id="sf-days-back" value="90" min="7" max="1095" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+          </div>
+          <button class="btn btn-primary btn-sm" id="btn-sf-pull" onclick="pullFromSalesforce()">☁️ Pull from Salesforce</button>
+          <div id="sf-pull-progress" style="display:none;margin-top:8px">
+            <div class="progress-wrap"><div class="progress-fill" style="width:30%;animation:indeterminate 1.5s infinite"></div></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:3px" id="sf-progress-label">Connecting…</div>
+          </div>
+          <div class="source-status empty" id="status-salesforce">Not connected</div>
         </div>
       </div>
 
@@ -870,6 +971,31 @@ function navigate(page) { _nav(page); }
       </div>
     </div><!-- /page-scoring -->
 
+    <!-- ══════════════════════════════════════════════
+         PAGE: PI Report
+    ══════════════════════════════════════════════════ -->
+    <div class="page" id="page-pi-report" style="display:none;padding:20px">
+      <div id="pi-report-placeholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:60px 20px">
+        <div style="font-size:48px">📊</div>
+        <h2 style="font-size:18px;font-weight:700;color:var(--text)">PI Planning Report</h2>
+        <p style="color:var(--text-muted);font-size:14px;text-align:center;max-width:400px">
+          Generate a full strategic PI Planning report from your current RFE data — clusters, ARR impact, trends, and actionable epics per domain.
+        </p>
+        <button class="btn btn-primary" onclick="loadPiReport()" style="padding:10px 28px;font-size:14px">
+          Generate PI Report
+        </button>
+      </div>
+      <div id="pi-report-loading" style="display:none;flex-direction:column;align-items:center;gap:12px;padding:60px 20px">
+        <div class="spinner" style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite"></div>
+        <span style="color:var(--text-muted);font-size:14px">Generating report…</span>
+      </div>
+      <div id="pi-report-header" style="display:none;margin-bottom:12px;display:flex;align-items:center;gap:12px">
+        <button class="btn btn-ghost btn-sm" onclick="reloadPiReport()">↺ Regenerate</button>
+        <span style="font-size:12px;color:var(--text-muted)" id="pi-report-timestamp"></span>
+      </div>
+      <iframe id="pi-report-iframe" src="" style="width:100%;height:85vh;border:none;border-radius:8px;display:none"></iframe>
+    </div><!-- /page-pi-report -->
+
   </div><!-- /content -->
 </div><!-- /main -->
 
@@ -883,9 +1009,11 @@ function navigate(page) { _nav(page); }
   <div class="drawer-body" id="email-drawer-body">
     <div style="color:var(--text-muted);text-align:center;padding:40px">Generating email…</div>
   </div>
-  <div class="drawer-footer">
-    <button class="btn btn-ghost" style="flex:1" onclick="copyEmailToClipboard()">📋 Copy All</button>
-    <button class="btn btn-success" style="flex:1" id="drawer-approve-btn" onclick="approveFromDrawer()">✅ Approve Cluster</button>
+  <div class="drawer-footer" style="flex-wrap:wrap;gap:8px">
+    <button class="btn btn-primary" style="flex:1 1 100%" id="btn-send-email" onclick="sendEmailFromDrawer()">📤 Send Email</button>
+    <button class="btn btn-ghost btn-sm" style="flex:1" onclick="copyEmailToClipboard()">📋 Copy</button>
+    <button class="btn btn-ghost btn-sm" style="flex:1" onclick="openInOutlook()">✉️ Outlook draft</button>
+    <button class="btn btn-success btn-sm" style="flex:1" id="drawer-approve-btn" onclick="approveFromDrawer()">✅ Approve</button>
   </div>
 </div>
 
@@ -1038,6 +1166,31 @@ function formatDescriptionHtml(text) {
   document.addEventListener('mousemove',  e => { const t = tip(); if (t.style.display !== 'none') placeTip(e.clientX, e.clientY, t); });
   document.addEventListener('mouseout',   e => { if (e.target.closest('.score-tip')) tip().style.display = 'none'; });
 })();
+
+// ─── PI Report ────────────────────────────────────────────────────────────────
+function loadPiReport() {
+  document.getElementById('pi-report-placeholder').style.display = 'none';
+  document.getElementById('pi-report-loading').style.display = 'flex';
+  document.getElementById('pi-report-header').style.display = 'none';
+  document.getElementById('pi-report-iframe').style.display = 'none';
+  var iframe = document.getElementById('pi-report-iframe');
+  iframe.onload = function() {
+    document.getElementById('pi-report-loading').style.display = 'none';
+    document.getElementById('pi-report-header').style.display = 'flex';
+    iframe.style.display = 'block';
+    var ts = document.getElementById('pi-report-timestamp');
+    if (ts) ts.textContent = 'Generated at ' + new Date().toLocaleTimeString();
+  };
+  iframe.onerror = function() {
+    document.getElementById('pi-report-loading').style.display = 'none';
+    document.getElementById('pi-report-placeholder').style.display = 'flex';
+    toast('Failed to generate PI report', 'error');
+  };
+  iframe.src = '/api/pi-report';
+}
+function reloadPiReport() {
+  loadPiReport();
+}
 
 // ─── CSV Import ───────────────────────────────────────────────────────────────
 function handleCsvDrop(e) {
@@ -1302,6 +1455,53 @@ async function pollCfImport(jobId, label) {
       }
     } catch(e) { clearInterval(interval); }
   }, 2000);
+}
+
+// ── Salesforce direct pull ────────────────────────────────────────────────────
+async function pullFromSalesforce() {
+  const btn = document.getElementById('btn-sf-pull');
+  const prog = document.getElementById('sf-pull-progress');
+  const label = document.getElementById('sf-progress-label');
+  const status = document.getElementById('status-salesforce');
+  const daysBack = parseInt(document.getElementById('sf-days-back')?.value || '90');
+  btn.disabled = true; prog.style.display = ''; label.textContent = 'Connecting to Salesforce…';
+  try {
+    const res = await fetch('/api/pull?days_back=' + daysBack, {method: 'POST'});
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      throw new Error(err.detail || 'Pull failed');
+    }
+    const data = await res.json();
+    const interval = setInterval(async () => {
+      try {
+        const jr = await fetch('/api/status/' + data.job_id);
+        const job = await jr.json();
+        label.textContent = job.message || job.status;
+        if (job.status === 'done') {
+          clearInterval(interval);
+          btn.disabled = false; prog.style.display = 'none';
+          status.textContent = '✅ ' + (job.rfe_count ?? '') + ' RFEs pulled & scored';
+          status.className = 'source-status loaded';
+          toast('Salesforce pull complete — ' + (job.message || ''), 'success');
+          loadStats(); loadClusters();
+        } else if (job.status === 'error') {
+          clearInterval(interval);
+          btn.disabled = false; prog.style.display = 'none';
+          const msg = job.message || 'Unknown error';
+          const friendly = /INVALID_LOGIN|API_DISABLED|insufficient|LOGIN_MUST_USE_SECURITY_TOKEN/i.test(msg)
+            ? 'Salesforce rejected the connection — check credentials in .env, or ask IT to enable API access for your SF profile. (' + msg.slice(0, 120) + ')'
+            : msg;
+          status.textContent = '❌ Pull failed';
+          status.className = 'source-status empty';
+          toast(friendly, 'error');
+        }
+      } catch(e) { clearInterval(interval); btn.disabled = false; prog.style.display = 'none'; }
+    }, 1500);
+  } catch(e) {
+    btn.disabled = false; prog.style.display = 'none';
+    status.textContent = '❌ ' + e.message.slice(0, 60);
+    toast('Salesforce pull failed: ' + e.message, 'error');
+  }
 }
 
 function _updateSourceBadges(docs) {

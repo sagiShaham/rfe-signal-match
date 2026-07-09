@@ -1748,6 +1748,132 @@ async def api_send_emails():
     conn.commit(); conn.close()
     return {"sent": sent_total, "message": f"Wrote {sent_total} email files to output/"}
 
+# ─── Outlook email integration ────────────────────────────────────────────────
+
+class LogEmailRequest(BaseModel):
+    cluster_id: Optional[int] = None
+    case_number: Optional[str] = None
+    account_name: Optional[str] = None
+    to: str
+    cc: Optional[str] = None
+    subject: str
+    body: str
+    via: str = "outlook_draft"   # outlook_draft | graph
+
+@app.post("/api/log-email")
+async def api_log_email(req: LogEmailRequest):
+    """Log an email that was drafted/sent via Outlook so there's an audit trail."""
+    conn = get_db()
+    run_row = conn.execute("SELECT run_id FROM run_meta ORDER BY started_at DESC LIMIT 1").fetchone()
+    run_id = run_row["run_id"] if run_row else None
+    recipient = req.to + ((";" + req.cc) if req.cc else "")
+    conn.execute(
+        "INSERT INTO email_log (run_id,cluster_id,case_number,account_name,recipient_email,subject,body,status,sent_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (run_id, req.cluster_id, req.case_number, req.account_name,
+         recipient, req.subject, req.body,
+         {"graph": "sent_graph", "smtp": "sent_smtp"}.get(req.via, "drafted_outlook"),
+         datetime.utcnow().isoformat()),
+    )
+    conn.commit(); conn.close()
+    return {"logged": True}
+
+@app.post("/api/send-email-smtp")
+async def api_send_email_smtp(req: LogEmailRequest):
+    """
+    Send an email via SMTP (Office 365) — no Azure/Entra app registration required.
+    Set in .env:
+      SMTP_HOST=smtp.office365.com   (default)
+      SMTP_PORT=587                  (default, STARTTLS)
+      SMTP_USER=you@cynet.com        (the sending mailbox)
+      SMTP_PASS=<mailbox password or app password>
+      SMTP_FROM=you@cynet.com        (optional; defaults to SMTP_USER)
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.utils import formataddr
+
+    host = os.getenv("SMTP_HOST", "smtp.office365.com").strip()
+    port = int(os.getenv("SMTP_PORT", "587").strip() or "587")
+    user = os.getenv("SMTP_USER", "").strip()
+    pw   = os.getenv("SMTP_PASS", "").strip()
+    sender = os.getenv("SMTP_FROM", user).strip() or user
+    if not user or not pw:
+        raise HTTPException(501,
+            "SMTP is not configured. Add SMTP_USER and SMTP_PASS to .env "
+            "(SMTP_HOST defaults to smtp.office365.com, SMTP_PORT to 587).")
+
+    to_addrs = [a.strip() for a in req.to.split(";") if a.strip()]
+    cc_addrs = [a.strip() for a in (req.cc or "").split(";") if a.strip()]
+    if not to_addrs:
+        raise HTTPException(400, "No recipient address provided.")
+
+    msg = MIMEText(req.body, "plain", "utf-8")
+    msg["Subject"] = req.subject
+    msg["From"] = formataddr(("Cynet Product", sender))
+    msg["To"] = ", ".join(to_addrs)
+    if cc_addrs:
+        msg["Cc"] = ", ".join(cc_addrs)
+
+    def _smtp_send():
+        with smtplib.SMTP(host, port, timeout=20) as s:
+            s.ehlo(); s.starttls(); s.ehlo()
+            s.login(user, pw)
+            s.sendmail(sender, to_addrs + cc_addrs, msg.as_string())
+
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(executor, _smtp_send)
+    except smtplib.SMTPAuthenticationError as e:
+        raise HTTPException(502,
+            "SMTP login rejected. Your org likely has SMTP AUTH disabled (common with SSO), "
+            "or the account needs an app password. Ask IT to enable SMTP AUTH for the sending "
+            f"mailbox. ({str(e)[:120]})")
+    except Exception as e:
+        raise HTTPException(502, f"SMTP send failed: {str(e)[:200]}")
+
+    await api_log_email(LogEmailRequest(**{**req.dict(), "via": "smtp"}))
+    return {"sent": True, "via": "smtp"}
+
+@app.post("/api/send-email-graph")
+async def api_send_email_graph(req: LogEmailRequest):
+    """
+    Send an email via Microsoft Graph API (future).
+    Requires an Azure AD app registration with Mail.Send permission:
+    set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET, GRAPH_SENDER_UPN in .env.
+    """
+    tenant = os.getenv("GRAPH_TENANT_ID", "").strip()
+    client_id = os.getenv("GRAPH_CLIENT_ID", "").strip()
+    secret = os.getenv("GRAPH_CLIENT_SECRET", "").strip()
+    sender = os.getenv("GRAPH_SENDER_UPN", "").strip()
+    if not all([tenant, client_id, secret, sender]):
+        raise HTTPException(501,
+            "Microsoft Graph is not configured. Ask IT for an Azure AD app registration "
+            "with Mail.Send permission, then set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, "
+            "GRAPH_CLIENT_SECRET and GRAPH_SENDER_UPN in .env.")
+    import httpx
+    async with httpx.AsyncClient() as http:
+        tok = await http.post(
+            f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+            data={"grant_type": "client_credentials", "client_id": client_id,
+                  "client_secret": secret, "scope": "https://graph.microsoft.com/.default"})
+        if tok.status_code != 200:
+            raise HTTPException(502, f"Graph auth failed: {tok.text[:200]}")
+        access_token = tok.json()["access_token"]
+        to_list = [{"emailAddress": {"address": a.strip()}} for a in req.to.split(";") if a.strip()]
+        cc_list = [{"emailAddress": {"address": a.strip()}} for a in (req.cc or "").split(";") if a.strip()]
+        msg = {"message": {"subject": req.subject,
+                           "body": {"contentType": "Text", "content": req.body},
+                           "toRecipients": to_list, "ccRecipients": cc_list},
+               "saveToSentItems": True}
+        resp = await http.post(
+            f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
+            headers={"Authorization": f"Bearer {access_token}"}, json=msg)
+        if resp.status_code not in (200, 202):
+            raise HTTPException(502, f"Graph send failed: {resp.text[:200]}")
+    await api_log_email(LogEmailRequest(**{**req.dict(), "via": "graph"}))
+    return {"sent": True}
+
 # ─── Stats / history / config ─────────────────────────────────────────────────
 
 @app.get("/api/stats")
@@ -1796,6 +1922,12 @@ async def api_runs():
     conn = get_db()
     runs = [dict(r) for r in conn.execute("SELECT * FROM run_meta ORDER BY started_at DESC LIMIT 50").fetchall()]
     conn.close(); return {"runs": runs}
+
+@app.get("/api/pi-report", response_class=HTMLResponse)
+async def pi_report():
+    from scoring.pi_report_generator import generate_report
+    html = generate_report(DB_PATH)
+    return HTMLResponse(content=html)
 
 @app.get("/api/config")
 async def api_get_config():

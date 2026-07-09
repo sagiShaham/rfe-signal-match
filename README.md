@@ -2,7 +2,7 @@
 
 A FastAPI + vanilla JS tool for Cynet PMs to instantly identify which customer RFEs (feature requests) have already been delivered, are planned in the current PI, or are coming up — so no matched request ever gets missed in a customer conversation.
 
-**Current version: v2.0** — semantic vector scoring engine (bi-encoder + cross-encoder + GPU acceleration)
+**Current version: v2.1** — PI Planning Report tab, Outlook/SMTP email sending, live Salesforce pull
 
 ---
 
@@ -254,7 +254,46 @@ rfe-signal-match/
 | v1.1 | Search (case ID / subject / keyword), 12 canonical domain buckets |
 | v1.2 | Score-first pipeline, domain/sub-domain bonus, domain inference for blank fields |
 | v1.3 | Configurable match thresholds via UI, subject-only clustering, domain+sub-domain grouping |
-| **v2.0** | **Semantic vector scoring: bi-encoder + cross-encoder + GPU (MPS/CUDA). LLM judge cascade (off by default, ~$0.06/run with GPT-4o-mini). Real-time progress bar. ~4 min full run on Apple M4.** |
+| v2.0 | Semantic vector scoring: bi-encoder + cross-encoder + GPU (MPS/CUDA). LLM judge cascade (off by default, ~$0.06/run with GPT-4o-mini). Real-time progress bar. ~4 min full run on Apple M4. |
+| **v2.1** | **PI Planning Report tab (18 domain tabs, exec dashboard, Plotly charts, timeframe filter). Outlook email integration: editable To/CC, in-drawer Send via Office 365 SMTP, Outlook draft fallback, Graph API path (IT-gated). Live Salesforce pull (SOQL, no CSV export).** |
+
+---
+
+## v2.1 Features
+
+### 📊 PI Planning Report tab
+A portfolio-level strategic demand report generated natively from the RFE data in SQLite.
+- 18 domain tabs (Executive + 17 product domains) in fixed order
+- Executive page: Top 5 Strategic Epics (ranked by ARR + RFE count × $80K), Portfolio Demand Snapshot, Top 10 Domains, Trends Chart
+- Per-domain: Top 5 Epics, sortable request tables, ARR/customer/momentum charts, volume trend
+- Global timeframe filter (12 / 6 / 3 months / All Time) that recomputes all charts and epics client-side
+- Light-mode Plotly charts, copy-to-clipboard case numbers, full untruncated PM summaries
+- Served at `GET /api/pi-report` (self-contained HTML), embedded in the platform via iframe
+- Generator: [`scoring/pi_report_generator.py`](scoring/pi_report_generator.py)
+
+### ✉️ Outlook / email integration
+The email drawer (Signal Match → expand cluster → Generate Email) now supports sending, not just copying.
+- **Editable To** (customer contact) + **CC** (CSM / stakeholders) + editable Subject/Body
+- **📤 Send Email** — sends directly via Office 365 SMTP (`POST /api/send-email-smtp`). No Azure/Entra app registration needed; requires `SMTP_USER` / `SMTP_PASS` in `.env` and SMTP AUTH enabled on the mailbox.
+- **✉️ Outlook draft** — opens a pre-filled draft in the user's own Outlook via `mailto:` (zero setup, always works)
+- **Microsoft Graph path** — `POST /api/send-email-graph` for fully-automated service-mailbox sending. Requires an Azure AD app registration with `Mail.Send`; set `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` / `GRAPH_SENDER_UPN`.
+- Every send/draft is logged to the `email_log` table for audit (`sent_smtp` / `sent_graph` / `drafted_outlook`)
+
+### ☁️ Live Salesforce pull
+The "Salesforce API" card on Data Sources now pulls RFE cases live via SOQL (`POST /api/pull`) — no manual CSV export.
+- Configurable "days back" window
+- Live progress, then auto-scores the pulled RFEs
+- Requires SF API access on the account. Note: SSO-enforced orgs block username/password API login (`INVALID_SSO_GATEWAY_URL`) — needs an integration user or Connected App from your SF admin.
+
+### Environment variables (v2.1)
+
+| Variable | Purpose | Required for |
+|---|---|---|
+| `SMTP_USER`, `SMTP_PASS` | Office 365 mailbox for sending | 📤 Send Email |
+| `SMTP_HOST`, `SMTP_PORT` | Defaults `smtp.office365.com` / `587` | (optional) |
+| `SMTP_FROM` | From address (defaults to `SMTP_USER`) | (optional) |
+| `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `GRAPH_SENDER_UPN` | Azure AD app for Graph send | Graph send (optional) |
+| `SF_USERNAME`, `SF_PASSWORD`, `SF_SECURITY_TOKEN`, `SF_DOMAIN` | Salesforce API pull | ☁️ SF pull |
 
 ---
 

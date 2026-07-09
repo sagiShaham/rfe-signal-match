@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 rfe_dedup.db
+rfe_signals.db
+*.db
 .env
 *.log
 nohup.out
@@ -16,3 +18,4 @@ nohup.out
 ~$*
 # Local Claude Code settings (may contain tokens)
 .claude/settings.local.json
+.claude/worktrees/
