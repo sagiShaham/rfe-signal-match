@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+import broker_client  # RFE Mail Broker client (TEST-EMAIL ONLY)
+
 load_dotenv()
 
 app = FastAPI(title="RFE Signal Match")
@@ -1873,6 +1875,75 @@ async def api_send_email_graph(req: LogEmailRequest):
             raise HTTPException(502, f"Graph send failed: {resp.text[:200]}")
     await api_log_email(LogEmailRequest(**{**req.dict(), "via": "graph"}))
     return {"sent": True}
+
+# ─── RFE Mail Broker — internal TEST email only ───────────────────────────────
+# Submits controlled internal test batches to the production RFE Mail Broker and
+# reports their status. This is TEST-ONLY: recipients are restricted to the
+# allowed @cynet.com domain, subjects are forced to a [TEST] prefix, and the
+# batch size is capped. There is deliberately no real-customer/bulk send path
+# here — that workflow is owned separately by Sagi in the broker review portal.
+# The broker Function keys live only in server env and are never sent to the
+# browser. The reviewUrl is a temporary credential and is never logged.
+
+class TestEmailSubmitRequest(BaseModel):
+    recipient: str
+    subject: str
+    body: str
+    rfe_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    cluster_id: Optional[int] = None
+
+@app.get("/api/test-email/config")
+async def api_test_email_config():
+    """Safe, secret-free config the UI uses to enable/disable the test action."""
+    return broker_client.config_status()
+
+@app.post("/api/test-email/submit")
+async def api_test_email_submit(req: TestEmailSubmitRequest):
+    try:
+        cfg = broker_client.get_config()
+    except broker_client.BrokerConfigError as e:
+        raise HTTPException(503,
+            "The RFE Mail Broker is not configured on the server. " + str(e))
+    if not cfg.test_mode:
+        raise HTTPException(403,
+            "Test mode is disabled on the server (RFE_BROKER_TEST_MODE is not true).")
+    try:
+        payload = broker_client.build_test_batch(
+            recipient=req.recipient, subject=req.subject, body=req.body,
+            domain=cfg.allowed_domain, rfe_id=req.rfe_id,
+            customer_id=req.customer_id, customer_name=req.customer_name)
+        result = await broker_client.submit_batch(payload)
+    except broker_client.BrokerError as e:
+        raise HTTPException(e.status_code, str(e))
+
+    # Audit trail (never store the reviewUrl — it is a temporary credential)
+    try:
+        msg = payload["messages"][0]
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO email_log (run_id,cluster_id,case_number,account_name,"
+            "recipient_email,subject,body,status,sent_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (None, req.cluster_id, req.rfe_id, req.customer_name,
+             msg["recipient"], msg["subject"], "[internal test batch submitted to broker]",
+             f"test_{result.get('status', 'submitted')}", datetime.utcnow().isoformat()))
+        conn.commit(); conn.close()
+    except Exception:
+        pass
+
+    return result   # {batchId, status, reviewUrl, messageCount}
+
+@app.get("/api/test-email/status/{batch_id}")
+async def api_test_email_status(batch_id: str):
+    try:
+        broker_client.get_config()
+    except broker_client.BrokerConfigError:
+        raise HTTPException(503, "The RFE Mail Broker is not configured on the server.")
+    try:
+        return await broker_client.get_status(batch_id)
+    except broker_client.BrokerError as e:
+        raise HTTPException(e.status_code, str(e))
 
 # ─── Stats / history / config ─────────────────────────────────────────────────
 

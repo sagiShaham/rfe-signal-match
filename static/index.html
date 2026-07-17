@@ -172,6 +172,15 @@ input[type=file]{display:none}
 .email-input{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:8px 12px;font-size:13px;width:100%;outline:none;font-family:inherit;color:var(--text)}
 .email-input:focus,.email-textarea:focus{border-color:var(--accent)}
 .email-textarea:focus{border-color:var(--accent)}
+.email-input:disabled{background:#f1f5f9;color:var(--text-muted);cursor:not-allowed}
+
+/* Internal test email drawer (RFE Mail Broker) */
+#test-email-drawer{position:fixed;top:0;right:-540px;width:480px;max-width:96vw;height:100vh;background:var(--card);border-left:1px solid var(--border);box-shadow:-8px 0 40px rgba(0,0,0,.18);z-index:900;transition:right .3s ease;display:flex;flex-direction:column}
+#test-email-drawer.open{right:0}
+.test-warn{background:var(--med-bg);border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.55;margin-bottom:14px}
+.test-cc-disabled{background:#f1f5f9;border:1px dashed var(--border);border-radius:7px;padding:8px 12px;font-size:12px;color:var(--text-muted)}
+.test-preview{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:12px;font-size:13px;line-height:1.6;max-height:220px;overflow:auto}
+.test-status-line{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;flex-wrap:wrap}
 
 /* Scoring Config */
 .config-section{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow);padding:22px 24px;margin-bottom:16px}
@@ -1014,6 +1023,20 @@ function navigate(page) { _nav(page); }
     <button class="btn btn-ghost btn-sm" style="flex:1" onclick="copyEmailToClipboard()">📋 Copy</button>
     <button class="btn btn-ghost btn-sm" style="flex:1" onclick="openInOutlook()">✉️ Outlook draft</button>
     <button class="btn btn-success btn-sm" style="flex:1" id="drawer-approve-btn" onclick="approveFromDrawer()">✅ Approve</button>
+    <button class="btn btn-ghost btn-sm" style="flex:1 1 100%" title="Send a controlled internal test to a @cynet.com mailbox via the RFE Mail Broker" onclick="openTestDrawer()">🧪 Send internal test</button>
+  </div>
+</div>
+
+<!-- Internal test-email drawer — submits to the RFE Mail Broker (TEST only, @cynet.com) -->
+<div id="test-email-drawer">
+  <div class="drawer-header">
+    <span style="font-size:18px">🧪</span>
+    <span class="drawer-title">Send Internal Test</span>
+    <button class="btn btn-ghost btn-sm" onclick="closeTestDrawer()">✕ Close</button>
+  </div>
+  <div class="drawer-body" id="test-drawer-body"></div>
+  <div class="drawer-footer">
+    <button class="btn btn-primary" style="flex:1" id="btn-submit-test" onclick="submitTestEmail()">🧪 Submit test</button>
   </div>
 </div>
 
@@ -2424,6 +2447,217 @@ function copyEmailToClipboard() {
 async function approveFromDrawer() {
   if (drawerClusterId) { await approveCluster(drawerClusterId); }
   closeEmailDrawer();
+}
+
+// ─── Internal test email (RFE Mail Broker) ────────────────────────────────────
+// TEST ONLY. Submits a single controlled internal message to the broker, then
+// polls status. Real customer sending is not implemented here (owned by Sagi).
+var _testInFlight = false;      // duplicate-submit guard
+var _testPollTimer = null;
+var _testCtx = null;            // { cluster_id, rfe_id, customer_name, subject, body }
+var _testReviewUrl = null;      // temporary credential — kept in memory only, never logged
+var _TEST_FINAL = ['Completed', 'PartiallyFailed', 'Failed', 'DryRunCompleted', 'Rejected'];
+
+function _isCynetEmail(s) { return /^[^@\s]+@cynet\.com$/i.test((s || '').trim()); }
+
+function _plainToHtml(t) {
+  var e = esc(t || '');
+  var paras = e.split(/\n{2,}/).filter(function(p){ return p.trim(); });
+  if (!paras.length) return '<p style="margin:0">(empty)</p>';
+  return paras.map(function(p){ return '<p style="margin:0 0 8px">' + p.replace(/\n/g, '<br>') + '</p>'; }).join('');
+}
+
+function openTestDrawer() {
+  // Capture the currently previewed email + RFE context from the email drawer.
+  var cluster = _getClusters().find(function(c){ return c.id === drawerClusterId; });
+  var members = (cluster && cluster.members) ? cluster.members : [];
+  var selEl = document.getElementById('email-rfe-sel');
+  var selId = selEl ? parseInt(selEl.value) : null;
+  var member = (selId ? members.find(function(m){ return m.id === selId; }) : null) || members[0] || {};
+  var subjEl = document.getElementById('email-subject');
+  var bodyEl = document.getElementById('email-body');
+  var curSubject = subjEl ? (subjEl.value || subjEl.textContent || '') : '';
+  var curBody = bodyEl ? (bodyEl.value || bodyEl.textContent || '') : '';
+  _testCtx = {
+    cluster_id: drawerClusterId,
+    rfe_id: member.case_number || null,
+    customer_name: member.account_name || (cluster && cluster.cluster_title) || 'Cynet Internal',
+    subject: curSubject,
+    body: curBody
+  };
+  document.getElementById('test-email-drawer').classList.add('open');
+  _renderTestForm();
+}
+
+function closeTestDrawer() {
+  document.getElementById('test-email-drawer').classList.remove('open');
+  if (_testPollTimer) { clearInterval(_testPollTimer); _testPollTimer = null; }
+  _testReviewUrl = null;   // do not retain the confidential review link
+}
+
+async function _renderTestForm() {
+  var body = document.getElementById('test-drawer-body');
+  body.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:30px">' +
+    '<span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2)"></span>' +
+    '<br><br>Checking mail broker…</div>';
+  var submitBtn = document.getElementById('btn-submit-test');
+  var cfg;
+  try { cfg = await (await fetch('/api/test-email/config')).json(); }
+  catch (e) { cfg = { configured: false }; }
+
+  // Configuration missing → disable the action with an admin-facing message.
+  if (!cfg.configured || cfg.test_mode === false) {
+    submitBtn.disabled = true;
+    body.innerHTML = '<div class="test-warn">⚙️ <strong>Internal test sending is unavailable.</strong><br>' +
+      (cfg.test_mode === false
+        ? 'Test mode is disabled on the server (RFE_BROKER_TEST_MODE).'
+        : 'The RFE Mail Broker is not configured. An administrator must set ' +
+          'RFE_BROKER_BASE_URL, RFE_BROKER_SUBMIT_KEY and RFE_BROKER_STATUS_KEY on the server.') +
+      '</div>';
+    return;
+  }
+  submitBtn.disabled = false;
+
+  var domain = cfg.allowed_domain || 'cynet.com';
+  var lastRecip = '';
+  try { lastRecip = localStorage.getItem('rfe_test_recipient') || ''; } catch (e) {}
+  var defSubject = _testCtx.subject || '';
+  if (!/^\[TEST\]/.test(defSubject)) defSubject = '[TEST] ' + defSubject;
+
+  body.innerHTML =
+    '<div class="test-warn">🧪 <strong>Internal test only.</strong> This sends one message to a <strong>@' +
+      esc(domain) + '</strong> mailbox through the RFE Mail Broker review portal. It is <strong>not</strong> ' +
+      'sent to a customer. Production customer sending is not available here.</div>' +
+    '<div class="email-field"><label>Test recipient (@' + esc(domain) + ')</label>' +
+      '<input class="email-input" id="test-recipient" placeholder="you@' + esc(domain) + '" value="' + esc(lastRecip) + '"></div>' +
+    '<div class="email-field"><label>Subject (must start with [TEST])</label>' +
+      '<input class="email-input" id="test-subject" value="' + esc(defSubject) + '"></div>' +
+    '<div class="email-field"><label>CC</label>' +
+      '<div class="test-cc-disabled">CC is not yet supported by the RFE Mail Broker and will not be submitted.</div></div>' +
+    '<div class="email-field"><label>RFE ID</label><div class="val">' + esc(_testCtx.rfe_id || '—') + '</div></div>' +
+    '<div class="email-field"><label>Customer</label><div class="val">' + esc(_testCtx.customer_name || '—') + '</div></div>' +
+    '<div class="email-field"><label>Message preview</label><div class="test-preview">' + _plainToHtml(_testCtx.body) + '</div></div>' +
+    '<div id="test-result"></div>';
+}
+
+async function submitTestEmail() {
+  if (_testInFlight) return;               // duplicate-click protection
+  var recipEl = document.getElementById('test-recipient');
+  var subjEl = document.getElementById('test-subject');
+  if (!recipEl || !subjEl) return;
+  var recip = (recipEl.value || '').trim();
+  var subject = (subjEl.value || '').trim();
+  if (!_isCynetEmail(recip)) {
+    _toast('Recipient must be a valid @cynet.com address', 'error');
+    recipEl.focus(); return;
+  }
+  if (!/^\[TEST\]/.test(subject)) subject = '[TEST] ' + subject;
+  if (!(_testCtx.body || '').trim()) { _toast('The message body is empty', 'error'); return; }
+
+  _testInFlight = true;
+  var btn = document.getElementById('btn-submit-test');
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    try { localStorage.setItem('rfe_test_recipient', recip); } catch (e) {}
+    var res = await fetch('/api/test-email/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: recip, subject: subject, body: _testCtx.body,
+        rfe_id: _testCtx.rfe_id, customer_name: _testCtx.customer_name,
+        cluster_id: _testCtx.cluster_id
+      })
+    });
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+    _renderTestResult(data);
+    _toast('Test batch submitted — open the review portal to approve', 'success');
+    _startTestPolling(data.batchId);
+  } catch (e) {
+    _toast('Test submit failed: ' + e.message, 'error');
+  } finally {
+    _testInFlight = false; btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+function _renderTestResult(data) {
+  var el = document.getElementById('test-result');
+  if (!el) return;
+  _testReviewUrl = data.reviewUrl || null;   // in-memory only; never logged/persisted
+  var linkBtns = _testReviewUrl
+    ? '<button class="btn btn-primary btn-sm" style="flex:1" onclick="_openReviewPortal()">🔗 Open review portal</button>' +
+      '<button class="btn btn-ghost btn-sm" style="flex:1" onclick="_copyReviewLink()">📋 Copy review link</button>'
+    : '';
+  el.innerHTML =
+    '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px">' +
+    '<div class="email-field"><label>Batch ID</label><div class="val">' + esc(data.batchId || '—') + '</div></div>' +
+    '<div id="test-status-panel"></div>' +
+    (linkBtns ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' + linkBtns + '</div>' : '') +
+    '</div>';
+  _renderTestStatus({ status: data.status || 'PendingReview', counts: {}, items: [] });
+}
+
+function _openReviewPortal() {
+  if (_testReviewUrl) window.open(_testReviewUrl, '_blank', 'noopener,noreferrer');
+}
+function _copyReviewLink() {
+  if (!_testReviewUrl) return;
+  navigator.clipboard.writeText(_testReviewUrl)
+    .then(function(){ _toast('Review link copied — treat as confidential', 'success'); })
+    .catch(function(){ _toast('Copy failed', 'error'); });
+}
+
+function _startTestPolling(batchId) {
+  if (_testPollTimer) { clearInterval(_testPollTimer); _testPollTimer = null; }
+  if (!batchId) return;
+  var poll = async function() {
+    try {
+      var res = await fetch('/api/test-email/status/' + encodeURIComponent(batchId));
+      if (!res.ok) return;
+      var data = await res.json();
+      _renderTestStatus(data);
+      if (_TEST_FINAL.indexOf(data.status) >= 0) { clearInterval(_testPollTimer); _testPollTimer = null; }
+    } catch (e) { /* transient — keep polling */ }
+  };
+  poll();
+  _testPollTimer = setInterval(poll, 5000);   // every 5s until a final state
+}
+
+function _renderTestStatus(data) {
+  var panel = document.getElementById('test-status-panel');
+  if (!panel) return;
+  var st = data.status || 'PendingReview';
+  var counts = data.counts || {};
+  var sent = counts.Sent || 0, failed = counts.Failed || 0;
+  var isFinal = _TEST_FINAL.indexOf(st) >= 0;
+  var color = st === 'Completed' ? 'var(--success)'
+    : st === 'Rejected' ? 'var(--text-muted)'
+    : (st === 'Failed' || st === 'PartiallyFailed') ? 'var(--high)'
+    : 'var(--accent)';
+  var guide = ({
+    PendingReview:   'Open the review portal and approve or reject this test batch.',
+    Queuing:         'The approved test message is being processed.',
+    Queued:          'The approved test message is being processed.',
+    Sending:         'The approved test message is being processed.',
+    Completed:       'Test message sent from product-notifications@cynet.com.',
+    Rejected:        'Batch rejected — no email was sent.',
+    Failed:          'Sending failed. See the details below.',
+    PartiallyFailed: 'Some messages failed. See the details below.',
+    DryRunCompleted: 'Dry-run completed — no real email was sent.'
+  })[st] || '';
+  var itemsHtml = (data.items || []).map(function(it) {
+    return '<div class="test-status-line">• ' + esc(it.recipient || '') + ' — <strong>' + esc(it.status || '') + '</strong>' +
+      (it.attemptCount ? ' (attempt ' + it.attemptCount + ')' : '') +
+      (it.errorCode ? ' <span style="color:var(--high)">' + esc(it.errorCode) + '</span>' : '') + '</div>';
+  }).join('');
+  panel.innerHTML =
+    '<div class="test-status-line"><strong style="color:' + color + '">Status: ' + esc(st) + '</strong>' +
+      (isFinal ? '' : ' <span class="spinner" style="border-top-color:var(--accent);border-color:rgba(59,130,246,.2);width:12px;height:12px"></span>') + '</div>' +
+    (guide ? '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 6px">' + esc(guide) + '</div>' : '') +
+    '<div class="test-status-line">Sent: <strong>' + sent + '</strong> · Failed: <strong>' + failed + '</strong></div>' +
+    (data.approvedBy ? '<div class="test-status-line">Approved by: ' + esc(data.approvedBy) + '</div>' : '') +
+    (data.rejectedBy ? '<div class="test-status-line">Rejected by: ' + esc(data.rejectedBy) + '</div>' : '') +
+    (itemsHtml ? '<div style="margin-top:6px">' + itemsHtml + '</div>' : '');
 }
 
 // ─── Scoring Config ───────────────────────────────────────────────────────────

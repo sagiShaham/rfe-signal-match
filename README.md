@@ -307,6 +307,127 @@ Copy the `https://` URL ngrok prints and share it. Requires a free ngrok account
 
 ---
 
+## RFE Mail Broker — internal test email
+
+RFE Signal Match can submit **internal test emails** to the production **RFE Mail Broker**
+(Azure Function `func-rfe-notif-prd-1791a`), open the broker's browser review portal, and
+monitor batch status.
+
+> **Scope: TEST ONLY.** This integration only ever sends controlled internal test messages —
+> recipients restricted to `@cynet.com`, subjects forced to a `[TEST]` prefix, batch size
+> capped at 5. **Production customer sending is not implemented here** and remains the
+> responsibility of Sagi, via the broker's own Entra-authenticated review portal.
+
+### Architecture
+
+```
+Browser (test drawer)  ──►  POST /api/test-email/submit        (local backend only)
+                       ──►  GET  /api/test-email/status/{id}
+                       ──►  GET  /api/test-email/config          (safe booleans, no secrets)
+   main.py  ──►  broker_client.py  ──►  https://func-rfe-notif-prd-1791a.azurewebsites.net/api
+                    (x-functions-key header — server-side only)
+```
+
+- The browser calls **only** local backend endpoints. It never calls the Azure Function
+  directly and never sees a Function key.
+- The submit/status Function keys are read from server environment variables, never returned
+  to the browser, never logged, never committed.
+- The broker returns a `reviewUrl` containing an **expiring token in the URL fragment** — a
+  temporary credential. It is passed to the browser once for the reviewer to open, kept in
+  memory only, and never logged or persisted.
+- Approval/rejection happens **only** in the broker's Entra-authenticated review portal — this
+  app does not reproduce or bypass it.
+
+### Environment variables
+
+Add to `.env` (see [`.env.example`](.env.example)). Never commit real values.
+
+| Variable | Purpose |
+|---|---|
+| `RFE_BROKER_BASE_URL` | Broker API base, e.g. `https://func-rfe-notif-prd-1791a.azurewebsites.net/api` |
+| `RFE_BROKER_SUBMIT_KEY` | `submit_batch` Function key (server only) |
+| `RFE_BROKER_STATUS_KEY` | `get_batch_status` Function key (server only) |
+| `RFE_BROKER_TEST_MODE` | Must be `true` to allow submits (default `true`) |
+| `RFE_BROKER_ALLOWED_TEST_DOMAIN` | Allowed recipient domain (default `cynet.com`) |
+
+If any required value is missing, the test-send action is **disabled** in the UI with an
+administrator-facing message; the rest of the app starts and runs normally.
+
+### Local development
+
+```bash
+cp .env.example .env         # then fill in the two Function keys (ask IT / broker owner)
+source venv/bin/activate
+uvicorn main:app --port 8000
+```
+
+Open the app → **Signal Match** → expand a cluster → **✉ Generate Email** → **🧪 Send internal test**.
+
+### Test-only safety controls
+
+- Recipient must match `^[^@\s]+@cynet.com$` exactly — subdomains (`x@a.cynet.com`) and suffix
+  tricks (`x@cynet.com.attacker.tld`) are rejected server-side.
+- Subject is normalized to begin with `[TEST]`.
+- Body must be non-empty; it is HTML-escaped server-side before being wrapped as `bodyHtml`.
+- Batch size is capped at 5 messages.
+- Submits are refused unless `RFE_BROKER_TEST_MODE=true`.
+- The sender mailbox (`product-notifications@cynet.com`) is fixed by the broker and is not
+  user-editable or present in the payload.
+
+### CC / Reply-To limitation
+
+The RFE Mail Broker does **not** support CC or Reply-To. The test drawer shows a disabled CC
+field with the message *"CC is not yet supported by the RFE Mail Broker and will not be
+submitted."* No workaround (e.g. injecting CC into the body or making extra mail calls) is
+implemented.
+
+### Sample request / response
+
+`POST /api/test-email/submit`
+```json
+{
+  "recipient": "schudinov@cynet.com",
+  "subject": "Your RFE status update",
+  "body": "Your requested capability is planned.",
+  "rfe_id": "RFE-12345",
+  "customer_name": "Acme Corp",
+  "cluster_id": 42
+}
+```
+Response (sanitized — no Function keys):
+```json
+{
+  "batchId": "RFE-TEST-20260717-131310-a1b2c3",
+  "status": "PendingReview",
+  "reviewUrl": "https://func-rfe-notif-prd-1791a.azurewebsites.net/api/review/RFE-TEST-...#token=…",
+  "messageCount": 1
+}
+```
+
+`GET /api/test-email/status/{batchId}` returns `batchId`, `status`, `messageCount`, `counts`
+(missing counters normalized to `0`), `approvedBy`, `rejectedBy`, and `items`
+(`recipient`, `status`, `attemptCount`, `errorCode`).
+
+### Status lifecycle
+
+```
+PendingReview → Queuing → Queued → Sending → Completed
+                                            → PartiallyFailed / Failed
+PendingReview → Rejected            (no email sent)
+```
+The UI polls status every 5 seconds and stops at a final state:
+`Completed`, `PartiallyFailed`, `Failed`, `DryRunCompleted`, `Rejected`.
+
+### Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| "Internal test sending is unavailable" | `RFE_BROKER_*` not set on the server, or `RFE_BROKER_TEST_MODE` ≠ `true`. |
+| `503` on submit | Broker not configured on the server. |
+| `502` "rejected the server's credentials" | Wrong/expired submit key — check `RFE_BROKER_SUBMIT_KEY` with the broker owner. |
+| Batch stuck at `PendingReview` | Nobody has approved/rejected in the broker review portal yet. |
+| `Failed` with `MailboxScope…` error code | Broker/Exchange mailbox scoping issue — a broker-side concern. |
+
 ## Security Notes
 
 - `rfe_dedup.db` is gitignored — contains customer data
