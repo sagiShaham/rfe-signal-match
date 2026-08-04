@@ -2,7 +2,7 @@
 
 A FastAPI + vanilla JS tool for Cynet PMs to instantly identify which customer RFEs (feature requests) have already been delivered, are planned in the current PI, or are coming up — so no matched request ever gets missed in a customer conversation.
 
-**Current version: v2.1** — PI Planning Report tab, Outlook/SMTP email sending, live Salesforce pull
+**Current version: v2.2 — UI makeover** — decluttered Signal Match (one status color, signal-bar match strength, collapsed toolbar), tab reorder, internal test-email via the RFE Mail Broker
 
 ---
 
@@ -255,7 +255,8 @@ rfe-signal-match/
 | v1.2 | Score-first pipeline, domain/sub-domain bonus, domain inference for blank fields |
 | v1.3 | Configurable match thresholds via UI, subject-only clustering, domain+sub-domain grouping |
 | v2.0 | Semantic vector scoring: bi-encoder + cross-encoder + GPU (MPS/CUDA). LLM judge cascade (off by default, ~$0.06/run with GPT-4o-mini). Real-time progress bar. ~4 min full run on Apple M4. |
-| **v2.1** | **PI Planning Report tab (18 domain tabs, exec dashboard, Plotly charts, timeframe filter). Outlook email integration: editable To/CC, in-drawer Send via Office 365 SMTP, Outlook draft fallback, Graph API path (IT-gated). Live Salesforce pull (SOQL, no CSV export).** |
+| v2.1 | PI Planning Report tab (18 domain tabs, exec dashboard, Plotly charts, timeframe filter). Outlook email integration: editable To/CC, in-drawer Send via Office 365 SMTP, Outlook draft fallback, Graph API path (IT-gated). Live Salesforce pull (SOQL, no CSV export). |
+| **v2.2 — UI makeover** | **Decluttered Signal Match: one status color language (pill), monochrome signal-bar match strength (Strong/Likely/Weak) replacing colored 0-1 chips, raw scores moved to hover/expand, 4 clean summary tiles, collapsed toolbar with a Filters popover, progressive-disclosure rows. Tabs reordered — lands on Signal Match; Scoring Config moved last under "Advanced". Plus: internal test-email — submit controlled `@cynet.com`-only `[TEST]` batches to the production RFE Mail Broker, open its Entra review portal, and monitor status (server-side keys, no customer sending).** |
 
 ---
 
