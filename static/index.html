@@ -245,6 +245,114 @@ input:checked+.toggle-slider:before{transform:translateX(18px)}
 
 /* Info box */
 .info-box{background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 16px;font-size:12.5px;color:#0369a1;margin-bottom:16px}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UX REDESIGN — calm Signal Match (one status color, signal-bar strength)
+   Scoped with `sig-` classes so other tabs are unaffected.
+   ═══════════════════════════════════════════════════════════════════ */
+:root{
+  --st-deliv-fg:#067647; --st-deliv-bg:#ecfdf3; --st-deliv-bd:#a9e5c3;
+  --st-pi-fg:#175cd3;    --st-pi-bg:#eff6ff;    --st-pi-bd:#b4d6ff;
+  --st-plan-fg:#b25b09;  --st-plan-bg:#fff8ec;  --st-plan-bd:#f5d9a3;
+  --st-none-fg:#5a6579;  --st-none-bg:#f1f3f6;  --st-none-bd:#e0e4ea;
+}
+/* Calmer, lighter sidebar */
+#sidebar{background:#f0f2f6;border-right:1px solid var(--border)}
+.sidebar-logo{color:var(--text)}
+.nav-item{color:var(--text-muted)}
+.nav-item:hover{background:#e6eaf1;color:var(--text)}
+.nav-item.active{background:#fff;color:var(--accent);box-shadow:var(--shadow);font-weight:600}
+.nav-sep{border-top:1px solid var(--border)}
+.sidebar-footer{color:var(--faint,#94a3b8)}
+.nav-adv-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9aa4b6;padding:0 10px 6px}
+
+/* Summary tiles */
+.sig-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0 18px}
+.sig-tile{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow)}
+.sig-tile .k{font-size:11.5px;color:var(--text-muted);font-weight:600}
+.sig-tile .v{font-size:26px;font-weight:750;letter-spacing:-.02em;margin-top:5px;font-variant-numeric:tabular-nums}
+.sig-tile .s{font-size:11.5px;color:#9aa4b6;margin-top:2px;font-variant-numeric:tabular-nums}
+.sig-tile.accent .v{color:var(--accent)}
+.sig-tile .tdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle;transform:translateY(-1px)}
+.tdot.deliv{background:var(--st-deliv-fg)} .tdot.pi{background:var(--st-pi-fg)}
+
+/* Toolbar */
+.sig-tool{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap;position:relative}
+.sig-search{flex:1;min-width:200px;max-width:360px;position:relative}
+.sig-search input{width:100%;padding:8px 12px 8px 32px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-family:inherit;font-size:13px}
+.sig-search input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(63,91,215,.12)}
+.sig-search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px;height:15px;stroke:#9aa4b6;fill:none;stroke-width:2}
+.sig-seg{display:inline-flex;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px}
+.sig-seg button{border:0;background:transparent;color:var(--text-muted);font-family:inherit;font-size:12.5px;font-weight:600;padding:5px 11px;border-radius:6px;cursor:pointer}
+.sig-seg button.active{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
+.sig-fbtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--card);color:var(--text-2,#3a4457);border-radius:8px;padding:7px 12px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.sig-fbtn:hover{border-color:var(--border-strong,#d3d8e0)}
+.sig-fbtn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2}
+.sig-fbtn .bdg{background:var(--accent);color:#fff;border-radius:20px;font-size:10.5px;font-weight:700;min-width:16px;height:16px;display:grid;place-items:center;padding:0 4px}
+.sig-rescore{display:inline-flex;align-items:center;gap:6px;margin-left:auto;border:0;border-radius:8px;padding:7px 13px;background:var(--accent);color:#fff;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+.sig-rescore:hover{filter:brightness(1.06)}
+
+/* Filters popover */
+.sig-pop{position:absolute;top:44px;left:0;z-index:60;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 34px rgba(16,24,40,.16);padding:14px 16px;width:280px;display:none}
+.sig-pop.open{display:block}
+.sig-pop h4{margin:0 0 7px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)}
+.sig-pop h4:not(:first-child){margin-top:14px}
+.sig-pop .opts{display:flex;flex-wrap:wrap;gap:6px}
+.sig-chipbtn{font-size:12px;font-weight:600;padding:5px 10px;border:1px solid var(--border);border-radius:20px;background:var(--bg);color:var(--text-muted);cursor:pointer}
+.sig-chipbtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.sig-pop select{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);font-size:12.5px;font-family:inherit;margin-top:2px}
+
+/* Table */
+.sig-group{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden}
+.sig-group-h{display:flex;align-items:center;gap:8px;padding:9px 16px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:12px}
+.sig-group-h .name{font-weight:700} .sig-group-h .n{color:var(--text-muted);font-weight:500}
+.sig-r{display:grid;grid-template-columns:1fr 148px 122px 78px 82px 22px;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s}
+.sig-r:hover{background:#f8fbff}
+.sig-r .rt{font-weight:600;font-size:13.5px}
+.sig-r .rs{font-size:11.5px;color:var(--text-muted);margin-top:2px}
+.sig-cust{font-size:12.5px;color:var(--text-2,#3a4457)} .sig-cust .more{color:#9aa4b6;font-size:11px}
+.sig-arr{font-weight:650;font-variant-numeric:tabular-nums;text-align:right;font-size:12.5px}
+.sig-chev{justify-self:end;color:#9aa4b6;transition:transform .15s}
+.sig-chev svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2}
+.sig-r.expanded{background:#f8fbff}
+.sig-r.expanded .sig-chev{transform:rotate(90deg)}
+
+/* Status pill — the one color language */
+.sig-pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:3px 9px 3px 8px;border-radius:20px;border:1px solid;white-space:nowrap}
+.sig-pill .pd{width:6px;height:6px;border-radius:50%}
+.sig-pill.deliv{color:var(--st-deliv-fg);background:var(--st-deliv-bg);border-color:var(--st-deliv-bd)} .sig-pill.deliv .pd{background:var(--st-deliv-fg)}
+.sig-pill.pi{color:var(--st-pi-fg);background:var(--st-pi-bg);border-color:var(--st-pi-bd)} .sig-pill.pi .pd{background:var(--st-pi-fg)}
+.sig-pill.plan{color:var(--st-plan-fg);background:var(--st-plan-bg);border-color:var(--st-plan-bd)} .sig-pill.plan .pd{background:var(--st-plan-fg)}
+.sig-pill.none{color:var(--st-none-fg);background:var(--st-none-bg);border-color:var(--st-none-bd)} .sig-pill.none .pd{background:var(--st-none-fg)}
+
+/* Match strength — monochrome signal bars */
+.sig-strw{display:flex;flex-direction:column;gap:3px}
+.sig-str{display:inline-flex;align-items:flex-end;gap:2px;height:13px}
+.sig-str i{width:3px;border-radius:1px;background:#9aa4b6}
+.sig-str i:nth-child(1){height:5px} .sig-str i:nth-child(2){height:9px} .sig-str i:nth-child(3){height:13px}
+.sig-str.s3 i{background:var(--text-2,#3a4457)}
+.sig-str.s2 i:nth-child(1),.sig-str.s2 i:nth-child(2){background:var(--text-2,#3a4457)}
+.sig-str.s1 i:nth-child(1){background:var(--text-2,#3a4457)}
+.sig-strw .lab{font-size:10px;color:#9aa4b6;letter-spacing:.02em}
+
+/* Expanded detail */
+.sig-exp{background:#fafbfc;border-bottom:1px solid var(--border);padding:14px 18px}
+.sig-exp:last-child{border-bottom:0}
+.sig-expl{font-size:13px;color:var(--text-2,#3a4457);margin-bottom:12px;max-width:74ch;line-height:1.55}
+.sig-expl b{color:var(--text)}
+.sig-lbl{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:0 0 7px}
+.sig-srcs{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.sig-src{display:flex;align-items:center;gap:10px;font-size:12.5px;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:7px 10px}
+.sig-src .sbadge{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted);border:1px solid var(--border-strong,#d3d8e0);border-radius:4px;padding:2px 6px;flex:none}
+.sig-src .stitle{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sig-src .sok{color:var(--st-deliv-fg);font-weight:700;font-size:11px}
+.sig-src .ssc{margin-left:auto;font-size:11px;color:#9aa4b6;font-variant-numeric:tabular-nums;flex:none}
+.sig-rfe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2,#3a4457);padding:6px 0;border-top:1px solid var(--border)}
+.sig-rfe .cid{font-family:monospace;font-size:11.5px;color:var(--accent);background:rgba(63,91,215,.08);border-radius:4px;padding:1px 6px;cursor:pointer}
+.sig-rfe .rmini{margin-left:auto;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:12px}
+.rmini.deliv{color:var(--st-deliv-fg);background:var(--st-deliv-bg)} .rmini.pi{color:var(--st-pi-fg);background:var(--st-pi-bg)}
+.rmini.plan{color:var(--st-plan-fg);background:var(--st-plan-bg)} .rmini.none{color:var(--st-none-fg);background:var(--st-none-bg)}
+.sig-acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 </style>
 <script>
 // ── Interaction helpers — in <head> so server-rendered HTML works immediately ──
@@ -564,29 +672,30 @@ function navigate(page) { _nav(page); }
     RFE Signal Match
   </div>
 
-  <a class="nav-item active" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    Data Sources
-    <span class="nav-badge" id="badge-sources" style="display:none"></span>
-  </a>
-
-  <div class="nav-sep"></div>
-
-  <a class="nav-item" data-page="signal" href="#signal" onclick="event.preventDefault();_nav('signal')" style="display:flex">
+  <a class="nav-item active" data-page="signal" href="#signal" onclick="event.preventDefault();_nav('signal')" style="display:flex">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
     Signal Match
     <span class="nav-badge" id="badge-signal" style="display:none">0</span>
   </a>
 
-  <a class="nav-item" data-page="scoring" href="#scoring" onclick="event.preventDefault();_nav('scoring')" style="display:flex">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M2 12h2M20 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
-    Scoring Config
+  <a class="nav-item" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    Data Sources
+    <span class="nav-badge" id="badge-sources" style="display:none"></span>
   </a>
 
   <a class="nav-item" data-page="pi-report" href="#pi-report" onclick="event.preventDefault();_nav('pi-report')" style="display:flex">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><polyline points="7 15 10 12 13 15 17 11"/></svg>
-    📊 PI Report
+    PI Report
     <span style="margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(251,191,36,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:4px;padding:1px 5px;line-height:1.5;text-transform:uppercase">Beta</span>
+  </a>
+
+  <div class="nav-sep"></div>
+  <div class="nav-adv-label">Advanced</div>
+
+  <a class="nav-item" data-page="scoring" href="#scoring" onclick="event.preventDefault();_nav('scoring')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M2 12h2M20 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
+    Scoring Config
   </a>
 
   <div class="sidebar-footer">v2.1 · Cynet PM Tools</div>
@@ -595,14 +704,14 @@ function navigate(page) { _nav(page); }
 <!-- Main -->
 <div id="main">
   <div id="topbar">
-    <span id="page-title">Data Sources</span>
+    <span id="page-title">Signal Match</span>
   </div>
   <div id="content">
 
     <!-- ══════════════════════════════════════════════
          PAGE: Data Sources
     ══════════════════════════════════════════════════ -->
-    <div class="page active" id="page-sources">
+    <div class="page" id="page-sources">
       <div class="section-header" style="margin-top:20px">
         <h2>Import your data</h2>
         <span style="font-size:12px;color:var(--text-muted)">Upload RFEs + context sources for signal matching</span>
@@ -744,74 +853,57 @@ function navigate(page) { _nav(page); }
     <!-- ══════════════════════════════════════════════
          PAGE: Signal Match
     ══════════════════════════════════════════════════ -->
-    <div class="page" id="page-signal">
+    <div class="page active" id="page-signal">
 
-      <!-- Stats -->
-      <div class="stats-row" id="signal-stats" style="margin-top:20px">
-        <div class="stat-card">
-          <div class="stat-label">Matched Clusters</div>
-          <div style="display:flex;align-items:baseline;gap:6px;margin-top:3px">
-            <div class="stat-value" id="stat-total">—</div>
-            <div style="font-size:12px;color:var(--text-muted);font-weight:600">clusters</div>
-          </div>
-          <div style="margin-top:4px;display:flex;align-items:baseline;gap:4px">
-            <span style="font-size:17px;font-weight:800;color:var(--accent)" id="stat-matched-rfes">—</span>
-            <span style="font-size:11px;color:var(--text-muted);font-weight:600">RFEs in clusters</span>
-          </div>
-          <div style="margin-top:3px;display:flex;align-items:baseline;gap:4px;border-top:1px solid var(--border);padding-top:4px">
-            <span style="font-size:12px;font-weight:700;color:var(--text-muted)" id="stat-rfe-big">—</span>
-            <span style="font-size:10px;color:var(--text-muted)">total in CSV</span>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">High Confidence</div>
-          <div class="stat-value" style="color:var(--high)" id="stat-high">—</div>
-          <div class="stat-sub">≥ threshold</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label" style="color:#15803d">✅ Delivered</div>
-          <div class="stat-value" style="color:#15803d" id="stat-delivered">—</div>
-          <div class="stat-sub">already shipped</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label" style="color:#1d4ed8">🏃 In Current PI</div>
-          <div class="stat-value" style="color:#1d4ed8" id="stat-in-pi">—</div>
-          <div class="stat-sub">being built now</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">💰 ARR at Stake</div>
-          <div class="stat-value" style="color:var(--accent)" id="stat-arr">—</div>
-          <div class="stat-sub">across matched clusters</div>
-        </div>
+      <!-- Summary tiles -->
+      <div class="sig-tiles">
+        <div class="sig-tile"><div class="k">Matched clusters</div><div class="v" id="stat-total">—</div><div class="s">of <span id="stat-matched-rfes">—</span> RFEs</div></div>
+        <div class="sig-tile"><div class="k"><span class="tdot deliv"></span>Delivered</div><div class="v" id="stat-delivered">—</div><div class="s">already shipped</div></div>
+        <div class="sig-tile"><div class="k"><span class="tdot pi"></span>In current PI</div><div class="v" id="stat-in-pi">—</div><div class="s">being built now</div></div>
+        <div class="sig-tile accent"><div class="k">ARR at stake</div><div class="v" id="stat-arr">—</div><div class="s">across matched clusters</div></div>
       </div>
 
-      <!-- Quiet one-line toolbar -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <div class="group-toggle">
-          <button class="group-toggle-btn active" id="grp-domain" onclick="setGroupBy('domain',this)">By Domain</button>
-          <button class="group-toggle-btn" id="grp-customer" onclick="setGroupBy('customer',this)">By Customer</button>
+      <!-- Toolbar -->
+      <div class="sig-tool">
+        <div class="sig-search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="signal-search" placeholder="Search case ID, subject, or keyword…" oninput="renderSignalTable()"/>
         </div>
-        <span style="color:var(--border)">|</span>
-        <button class="filter-btn" id="filter-all" onclick="setFilter('all',this)">All</button>
-        <button class="filter-btn active" id="filter-conf-medplus" onclick="setConfFilter('medium+',this)">🟢🟡 Medium +</button>
-        <button class="filter-btn" id="filter-conf-high" onclick="setConfFilter('high',this)">🟢 High</button>
-        <button class="filter-btn" id="filter-conf-med" onclick="setConfFilter('medium',this)">🟡 Medium</button>
-        <button class="filter-btn" id="filter-conf-low" onclick="setConfFilter('low',this)">🔴 Low</button>
-        <span style="color:var(--border)">|</span>
-        <button class="filter-btn" id="filter-delivered" onclick="setStatusFilter('delivered',this)">Delivered</button>
-        <button class="filter-btn" id="filter-pi" onclick="setStatusFilter('in_current_pi',this)">In PI</button>
-        <button class="filter-btn" id="filter-planned" onclick="setStatusFilter('planned',this)">Planned</button>
-        <span style="color:var(--border)">|</span>
-        <select id="domain-filter" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)" onchange="renderSignalTable()">
-          <option value="">All Domains</option>
-        </select>
-        <select id="sort-by" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)" onchange="renderSignalTable()">
-          <option value="confidence">Confidence ↓</option>
-          <option value="arr">ARR ↓</option>
-          <option value="date">Recency ↓</option>
-        </select>
-        <input class="search-input" id="signal-search" placeholder="Case ID, subject, keyword…" oninput="_doSearch(this.value)" style="max-width:240px"/>
-        <button class="btn btn-primary btn-sm" id="btn-rescore" style="margin-left:auto" onclick="rescoreRun()">⚡ Re-score</button>
+        <div class="sig-seg">
+          <button class="sig-seg-btn active" id="grp-domain" onclick="setGroupBy('domain',this)">Domain</button>
+          <button class="sig-seg-btn" id="grp-customer" onclick="setGroupBy('customer',this)">Customer</button>
+        </div>
+        <button class="sig-fbtn" id="btn-filters" onclick="toggleFilters(event)">
+          <svg viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.5 10 19 14 21 14 12.5 22 3"/></svg>
+          Filters <span class="bdg" id="filter-count" style="display:none">0</span>
+        </button>
+        <button class="sig-rescore" id="btn-rescore" onclick="rescoreRun()">Re-score</button>
+
+        <!-- Filters popover -->
+        <div class="sig-pop" id="filters-pop" onclick="event.stopPropagation()">
+          <h4>Match status</h4>
+          <div class="opts">
+            <button class="filter-btn active" id="filter-all" onclick="setFilter('all',this)">All</button>
+            <button class="filter-btn" id="filter-delivered" onclick="setStatusFilter('delivered',this)">Delivered</button>
+            <button class="filter-btn" id="filter-pi" onclick="setStatusFilter('in_current_pi',this)">In PI</button>
+            <button class="filter-btn" id="filter-planned" onclick="setStatusFilter('planned',this)">Planned</button>
+          </div>
+          <h4>Match strength</h4>
+          <div class="opts">
+            <button class="filter-btn" id="filter-conf-medplus" onclick="setConfFilter('medium+',this)">Strong + Likely</button>
+            <button class="filter-btn" id="filter-conf-high" onclick="setConfFilter('high',this)">Strong</button>
+            <button class="filter-btn" id="filter-conf-med" onclick="setConfFilter('medium',this)">Likely</button>
+            <button class="filter-btn" id="filter-conf-low" onclick="setConfFilter('low',this)">Weak</button>
+          </div>
+          <h4>Domain</h4>
+          <select id="domain-filter" onchange="renderSignalTable()"><option value="">All domains</option></select>
+          <h4>Sort by</h4>
+          <select id="sort-by" onchange="renderSignalTable()">
+            <option value="confidence">Match strength</option>
+            <option value="arr">ARR</option>
+            <option value="date">Recency</option>
+          </select>
+        </div>
       </div>
 
       <!-- Filtered-out counter -->
@@ -1807,7 +1899,8 @@ async function loadStats() {
     if (matchedRfeEl) matchedRfeEl.textContent = s.matched_rfe_count ?? '—';
     const rfeEl = document.getElementById('stat-rfe-big');
     if (rfeEl) rfeEl.textContent = s.rfe_count ?? '—';
-    document.getElementById('stat-high').textContent = s.high ?? '—';
+    const hiEl = document.getElementById('stat-high');
+    if (hiEl) hiEl.textContent = s.high ?? '—';
     document.getElementById('stat-delivered').textContent = s.delivered ?? '—';
     document.getElementById('stat-in-pi').textContent = s.in_current_pi ?? '—';
     const arr = s.arr || 0;
@@ -1851,7 +1944,7 @@ async function loadClusters() {
 
 function setGroupBy(mode, btn) {
   groupBy = mode;
-  document.querySelectorAll('.group-toggle-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.sig-seg-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderSignalTable();
 }
@@ -1899,10 +1992,28 @@ function populateDomainFilter() {
     domains.map(d => `<option value="${d}"${d===cur?' selected':''}>${esc(d)}</option>`).join('');
 }
 
+// ── Filters popover ───────────────────────────────────────────────────────────
+function toggleFilters(e){ if(e) e.stopPropagation(); const p=document.getElementById('filters-pop'); if(p) p.classList.toggle('open'); }
+function closeFilters(){ const p=document.getElementById('filters-pop'); if(p) p.classList.remove('open'); }
+document.addEventListener('click', function(e){
+  const p=document.getElementById('filters-pop');
+  if(p && p.classList.contains('open') && !e.target.closest('#filters-pop') && !e.target.closest('#btn-filters')) closeFilters();
+});
+function updateFilterCount(){
+  const el=document.getElementById('filter-count'); if(!el) return;
+  const domainSel=(document.getElementById('domain-filter')||{}).value||'';
+  let n=0;
+  if(statusFilter && statusFilter!=='all') n++;
+  if(confFilter && confFilter!=='medium+' && confFilter!=='all') n++;
+  if(domainSel) n++;
+  el.textContent=String(n); el.style.display = n>0 ? '' : 'none';
+}
+
 function renderSignalTable() {
   const search = (document.getElementById('signal-search')?.value || '').toLowerCase();
   const domainSel = (document.getElementById('domain-filter')?.value || '');
   const sortBy = document.getElementById('sort-by')?.value || 'confidence';
+  try { updateFilterCount(); } catch(e) {}
 
   // Only show matched clusters — exclude no_match entirely
   const matchedOnly = allClusters.filter(c => c.match_status && c.match_status !== 'no_match');
@@ -1996,21 +2107,10 @@ function renderSignalTable() {
   const sortedGroups = Object.keys(groups).sort();
   for (const grpKey of sortedGroups) {
     const grpClusters = groups[grpKey];
-    html += `<div class="signal-table-wrap" style="margin-bottom:12px">
-      <div class="signal-group-header">
-        <span>${esc(grpKey)}</span>
-        <span style="font-weight:400">${grpClusters.length} cluster${grpClusters.length!==1?'s':''}</span>
-      </div>
-      <div>
-        <div class="signal-row" style="background:#fafafa;cursor:default">
-          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">Domain</div>
-          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">Cluster / RFEs</div>
-          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">Customer</div>
-          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;text-align:center">Score</div>
-          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase">ARR</div>
-        </div>`;
+    html += `<div class="sig-group">
+      <div class="sig-group-h"><span class="name">${esc(grpKey)}</span><span class="n">· ${grpClusters.length} cluster${grpClusters.length!==1?'s':''}</span></div>`;
     grpClusters.forEach(c => { html += buildSignalRow(c); });
-    html += `</div></div>`;
+    html += `</div>`;
   }
   container.innerHTML = html;
 }
@@ -2101,159 +2201,91 @@ function buildSignalRow(c) {
   const arr = c.total_arr >= 1e6 ? '$'+(c.total_arr/1e6).toFixed(1)+'M' :
                c.total_arr >= 1e3 ? '$'+(c.total_arr/1e3).toFixed(0)+'K' :
                c.total_arr > 0    ? '$'+c.total_arr.toFixed(0) : '—';
-  const domain = members[0]?.domain || '—';
-  const confBand = c.confidence_band || 'low';
-  const confDots = {high:'🟢',medium:'🟡',low:'🔴'};
   const ms = c.match_status || 'no_match';
-  const statusLabels = {delivered:'✅ Delivered',in_current_pi:'🏃 In PI',planned:'🗓 Planned'};
-  const statusClasses = {delivered:'status-delivered',in_current_pi:'status-in_current_pi',planned:'status-planned'};
-  const statusChip = ms !== 'no_match'
-    ? `<span class="status-chip ${statusClasses[ms]||''}">${statusLabels[ms]||ms}</span>`
-    : '';
-  // Pre-compute sources for tooltips
-  const _ctxBd = (c.score_breakdown || {}).context_breakdown || {};
-  const _topSrc = Object.entries(_ctxBd).sort((a,b)=>b[1]-a[1])[0];
-  const _bandName = {high:'High',medium:'Medium',low:'Low'}[confBand] || confBand;
-  const _msName = {delivered:'Delivered',in_current_pi:'In Current PI',planned:'Planned',no_match:'No Match'}[ms] || ms;
-  // Find the source that actually DETERMINED the status (not just highest scorer)
-  const _statusSrcPfx = {delivered:['release_notes'],in_current_pi:['ado_current_pi'],planned:['ado_backlog','roadmap','confluence']}[ms]||[];
-  const _matchedSrc = Object.entries(_ctxBd)
-    .filter(([k]) => _statusSrcPfx.some(p => k.startsWith(p)))
-    .sort((a,b) => b[1]-a[1])[0] || _topSrc;
-  // Cluster chip tooltip — plain English
-  const _matchedSrcName = _matchedSrc ? (_matchedSrc[0].split('|')[1] || _matchedSrc[0].split('|')[0]) : null;
-  const _matchedSrcType = _matchedSrc ? _matchedSrc[0].split('|')[0].replace(/_/g,' ') : null;
-  const _clusterTip = [
-    `Similarity: ${(c.confidence_score||0).toFixed(2)} (${_bandName})`,
-    `These ${members.length} RFE${members.length!==1?'s':''} describe the same feature request`,
-    `and were auto-grouped by keyword overlap.`,
-    `──────────────────────────────`,
-    `Status → ${_msName}`,
-    _matchedSrc
-      ? `Matched in: ${_matchedSrcName} (${_matchedSrcType})`
-      : `No matching source found.`,
-    _matchedSrc
-      ? `${Math.round(_matchedSrc[1]*100)} out of 100 cluster keywords appear in that document.`
-      : ``,
-  ].filter(Boolean).join('&#10;');
-  const confChip = `<span class="chip chip-${confBand} score-tip" data-tip="${_clusterTip}">${confDots[confBand]||''} ${(c.confidence_score||0).toFixed(2)}</span>`;
-
+  const confBand = c.confidence_band || 'low';
+  const score = (c.confidence_score || 0).toFixed(2);
   const rowId = `row-${c.id}`;
   const expandId = `expand-${c.id}`;
 
-  // ── Section A: AI confidence sentence ─────────────────────────────────────
-  const sentenceHtml = c.confidence_sentence
-    ? `<div style="margin-bottom:14px;font-style:italic;color:var(--text-muted);font-size:13px;line-height:1.5;border-left:3px solid var(--accent);padding-left:10px">${esc(c.confidence_sentence)}</div>`
-    : '';
+  // Status pill — the one color language
+  const stMap = {
+    delivered:     {cls:'deliv', lab:'Delivered'},
+    in_current_pi: {cls:'pi',    lab:'In current PI'},
+    planned:       {cls:'plan',  lab:'Planned'},
+    no_match:      {cls:'none',  lab:'No match'},
+  };
+  const st = stMap[ms] || stMap.no_match;
+  const pill = `<span class="sig-pill ${st.cls}"><span class="pd"></span>${st.lab}</span>`;
 
-  // ── Section B: context sources + per-RFE grid ────────────────────────────────
-  const bd = c.score_breakdown || {};
-  const ctxBreakdown = bd.context_breakdown || {};
+  // Match strength — monochrome signal bars; raw score revealed on hover only
+  const strMap = {high:{c:'s3',l:'Strong'}, medium:{c:'s2',l:'Likely'}, low:{c:'s1',l:'Weak'}};
+  const sm = strMap[confBand] || strMap.low;
+  const strength = `<div class="sig-strw"><span class="sig-str ${sm.c}" title="${sm.l} match — ${score}"><i></i><i></i><i></i></span><span class="lab">${sm.l}</span></div>`;
 
-  // Column layout: Case# | Subject | Signal | Match | State | Customer
-  const _rfeGrid = '72px 1fr 56px 105px 130px 145px';
-  const _rfeHeader = `
-    <div style="display:grid;grid-template-columns:${_rfeGrid};gap:8px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 0;border-bottom:1px solid var(--border);margin-bottom:2px">
-      <div style="text-align:center">Case #</div><div>Subject</div><div style="text-align:center">Signal</div><div style="text-align:center">Match Status</div><div style="text-align:center">RFE State</div><div style="text-align:center">Customer</div>
-    </div>`;
+  const custHtml = accounts.length
+    ? esc(accounts[0]) + (accounts.length > 1 ? ` <span class="more">+${accounts.length-1}</span>` : '')
+    : '—';
 
-  const rfeRowsHtml = _rfeHeader + members.map(m => {
-    const caseId = m.case_number || '—';
-    const descSummary = (m.description || '').trim();
-    // Per-RFE match status (from per-RFE scoring) with cluster-level fallback
+  // Expand — plain-language explanation
+  const sentence = c.confidence_sentence
+    ? `<div class="sig-expl">${esc(c.confidence_sentence)}</div>`
+    : `<div class="sig-expl">These <b>${members.length} request${members.length!==1?'s':''}</b> describe the same feature. Status: <b>${st.lab}</b>.</div>`;
+
+  // Expand — where it matched (top sources, deduped by type; score shown here only)
+  const ctxBd = (c.score_breakdown || {}).context_breakdown || {};
+  const srcType = {release_notes:'Release notes',ado_current_pi:'ADO epic',ado_backlog:'ADO epic',roadmap:'Roadmap',confluence:'Confluence'};
+  const statusPfx = {delivered:['release_notes'],in_current_pi:['ado_current_pi'],planned:['ado_backlog','roadmap','confluence']}[ms]||[];
+  const _seenT = new Set();
+  const srcRows = Object.entries(ctxBd)
+    .filter(([,v]) => v >= 0.05).sort((a,b)=>b[1]-a[1])
+    .filter(([k]) => { const t=k.split('|')[0]; if(_seenT.has(t))return false; _seenT.add(t); return true; })
+    .slice(0,3)
+    .map(([k,v]) => {
+      const t=k.split('|')[0], title=k.split('|')[1]||t;
+      const isMatch = statusPfx.some(p=>k.startsWith(p));
+      return `<div class="sig-src"><span class="sbadge">${esc(srcType[t]||t.replace(/_/g,' '))}</span><span class="stitle">${esc(title)}</span>${isMatch?'<span class="sok">✓</span>':''}<span class="ssc">${v.toFixed(2)}</span></div>`;
+    }).join('');
+  const srcSection = srcRows ? `<p class="sig-lbl">Where it matched</p><div class="sig-srcs">${srcRows}</div>` : '';
+
+  // Expand — requests in this cluster
+  const rmini = {delivered:'deliv',in_current_pi:'pi',planned:'plan',no_match:'none'};
+  const rlab  = {delivered:'Delivered',in_current_pi:'In PI',planned:'Planned',no_match:'—'};
+  const rfeList = members.map(m => {
     const mMs = m.match_status || ms;
-    const mStatusChip = mMs !== 'no_match'
-      ? `<span class="status-chip ${statusClasses[mMs]||''}">${statusLabels[mMs]||mMs}</span>`
-      : '—';
-    // Per-RFE context signal score (from this RFE's own ctx_breakdown)
-    const _mBd = (m.ctx_breakdown && Object.keys(m.ctx_breakdown).length > 0)
-      ? m.ctx_breakdown : ctxBreakdown;
-    const _mEntries = Object.entries(_mBd).sort((a,b) => b[1]-a[1]);
-    const _mBest = _mEntries[0];
-    const _mSignal = _mBest ? _mBest[1] : null;
-    const _mSignalStr = _mSignal !== null ? _mSignal.toFixed(2) : '—';
-    // Status-matched source for this RFE
-    const _mSrcPfx = {delivered:['release_notes'],in_current_pi:['ado_current_pi'],planned:['ado_backlog','roadmap','confluence']}[mMs]||[];
-    const _mSrc = _mEntries.filter(([k]) => _mSrcPfx.some(p=>k.startsWith(p)))[0] || _mBest;
-    const _mSrcName = _mSrc ? _mSrc[0].split('|')[1] || _mSrc[0].split('|')[0] : null;
-    const _mSrcType = _mSrc ? _mSrc[0].split('|')[0].replace(/_/g,' ') : null;
-    const _mTip = [
-      `Signal: ${_mSignalStr}`,
-      _mSrc
-        ? `Found in: ${_mSrcName} (${_mSrcType})`
-        : `No context source matched this RFE`,
-      _mSrc
-        ? `${Math.round(_mSrc[1]*100)} out of 100 keywords from this RFE`
-        + `&#10;also appear in that document.`
-        + `&#10;(Higher = stronger match. 1.0 = full match)`
-        : ``,
-      `──────────────────────────────`,
-      `Grouped with ${members.length-1} similar RFE${members.length-1!==1?'s':''} (similarity ${(c.confidence_score||0).toFixed(2)})`,
-    ].filter(Boolean).join('&#10;');
-    return `<div style="background:#f4f6f9;border-radius:6px;padding:8px 10px;margin-bottom:4px;transition:background .15s">
-      <div style="display:grid;grid-template-columns:${_rfeGrid};gap:8px;align-items:center;font-size:12px">
-        <span class="copy-case" onclick="copyCase(this,'${esc(caseId)}')" title="Click to copy" style="display:flex;align-items:center;justify-content:center;text-align:center">${esc(caseId)}</span>
-        <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" title="${esc(m.subject||'')}">${esc(m.subject||'—')}</span>
-        <span class="score-tip" style="color:var(--accent);font-weight:700;text-align:center;display:block" data-tip="${_mTip}">${_mSignalStr}</span>
-        <div style="display:flex;justify-content:center">${mStatusChip}</div>
-        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);text-align:center">${m.status ? esc(m.status) : '—'}</div>
-        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);text-align:center">${esc(m.account_name||'—')}</div>
-      </div>
-      <div style="margin-top:6px;padding-left:2px;font-size:12px;line-height:1.5">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
-          <strong style="font-weight:700;color:var(--text)">Summary:</strong>
-          ${fmtDate(m.created_date) ? `<span style="font-size:11px;color:var(--text-muted)">📅 Opened: ${fmtDate(m.created_date)}</span>` : ''}
-        </div>
-        ${descSummary
-          ? `<div>${formatDescriptionHtml(descSummary)}</div>`
-          : `<div style="color:var(--text-muted);font-style:italic;line-height:1.5">No description provided.</div>`}
-      </div>
-      ${buildMatchedSources(m, ctxBreakdown)}
-    </div>`;
+    const cid = esc(m.case_number || '—');
+    return `<div class="sig-rfe"><span class="cid" onclick="event.stopPropagation();copyCase(this,'${cid}')" title="Copy case ID">${cid}</span>`
+      + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.subject||'—')}</span>`
+      + `<span style="color:#9aa4b6">${esc(m.account_name||'')}</span>`
+      + `<span class="rmini ${rmini[mMs]||'none'}">${rlab[mMs]||'—'}</span></div>`;
   }).join('');
 
-  // ── Section C: Generate Email ───────────────────────────────────────────────
-  let emailSectionHtml;
+  // Expand — actions
+  let emailBtn;
   if (accounts.length <= 1) {
-    const _singleAcct = accounts[0] || null;
-    const _acctArg = JSON.stringify(_singleAcct).replace(/"/g, '&quot;');
-    emailSectionHtml = `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openEmailDrawer(${c.id},${_acctArg})">✉ Generate Email</button>`;
+    const _acctArg = JSON.stringify(accounts[0] || null).replace(/"/g, '&quot;');
+    emailBtn = `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openEmailDrawer(${c.id},${_acctArg})">Generate email</button>`;
   } else {
-    emailSectionHtml = `
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <select id="acct-sel-${c.id}" onclick="event.stopPropagation()" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)">
-          ${accounts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}
-        </select>
-        <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openEmailDrawer(${c.id},document.getElementById('acct-sel-${c.id}').value)">✉ Generate Email</button>
-      </div>`;
+    emailBtn = `<select id="acct-sel-${c.id}" onclick="event.stopPropagation()" style="padding:6px 9px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:var(--card)">${accounts.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select>`
+      + `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openEmailDrawer(${c.id},document.getElementById('acct-sel-${c.id}').value)">Generate email</button>`;
   }
+  const caseIds = members.map(m => (m.case_number||'').replace(/'/g,'')).filter(Boolean).join(', ');
+  const copyBtn = `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();navigator.clipboard.writeText('${caseIds}').then(function(){toast('Case IDs copied','success')})">Copy case IDs</button>`;
 
   return `
-    <div class="signal-row" id="${rowId}" onclick="toggleExpand(${c.id})">
-      <div><span class="sig-domain">${esc(domain)}</span></div>
-      <div>
-        <div class="sig-title">${esc(c.cluster_title||'Untitled')}</div>
-        <div class="sig-accounts">${members.length} RFE${members.length!==1?'s':''}</div>
-      </div>
-      <div style="font-size:12px;font-weight:500;overflow:hidden">
-        ${accounts.length > 0
-          ? esc(accounts[0]) + (accounts.length > 1 ? `<br><span style="font-size:10px;color:var(--text-muted)">+${accounts.length-1} more</span>` : '')
-          : '—'}
-      </div>
-      <div style="text-align:center">${confChip}</div>
+    <div class="sig-r" id="${rowId}" onclick="toggleExpand(${c.id})">
+      <div><div class="rt">${esc(c.cluster_title||'Untitled')}</div><div class="rs">${members.length} RFE${members.length!==1?'s':''}</div></div>
+      <div class="sig-cust">${custHtml}</div>
+      <div>${pill}</div>
+      ${strength}
       <div class="sig-arr">${arr}</div>
+      <div class="sig-chev"><svg viewBox="0 0 24 24"><polyline points="9 6 15 12 9 18"/></svg></div>
     </div>
-    <div class="why-row" id="${expandId}" style="display:none">
-      <div class="why-panel">
-        ${sentenceHtml}
-        <div style="margin-bottom:14px;margin-top:${sentenceHtml?'12px':'0'}">
-          <div class="why-label" style="margin-bottom:6px">📋 RFEs in this cluster</div>
-          ${rfeRowsHtml || '<div style="color:var(--text-muted);font-size:12px">No RFEs</div>'}
-        </div>
-        <div style="padding-top:10px;border-top:1px solid var(--border)">
-          ${emailSectionHtml}
-        </div>
-      </div>
+    <div class="sig-exp" id="${expandId}" style="display:none">
+      ${sentence}
+      ${srcSection}
+      <p class="sig-lbl">Requests in this cluster</p>
+      ${rfeList || '<div style="color:var(--text-muted);font-size:12px">No RFEs</div>'}
+      <div class="sig-acts">${emailBtn}${copyBtn}</div>
     </div>`;
 }
 
