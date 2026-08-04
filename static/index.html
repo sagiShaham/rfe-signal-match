@@ -2854,7 +2854,7 @@ function _applyInitialCounts() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   try { _applyInitialCounts(); } catch(e) { console.error('initCounts:', e); }
-  try { _nav('sources'); } catch(e) { console.error('navigate:', e); }
+  try { _nav('signal'); } catch(e) { console.error('navigate:', e); }
   try { loadDocs(); } catch(e) { console.error('loadDocs init:', e); }
   // Preload cluster data in background so Signal Match renders instantly on tab click
   try { loadClusters(); } catch(e) { console.error('preload clusters:', e); }
