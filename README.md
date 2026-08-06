@@ -308,6 +308,79 @@ Copy the `https://` URL ngrok prints and share it. Requires a free ngrok account
 
 ---
 
+## Weekly Analysis tab
+
+A native implementation of the Cynet weekly/bi-weekly RFE report, built to answer
+one question: **which state should each RFE be assigned?** (Add to Backlog ·
+Out of Scope · Needs Info · Deferred).
+
+Generated directly from the SQLite DB — no XLS upload. Served at
+`GET /api/weekly-report` as a self-contained light-mode HTML document and embedded
+in the platform via an iframe. Generator:
+[`scoring/weekly_report_generator.py`](scoring/weekly_report_generator.py).
+
+### Structure
+
+- **11 sections:** Executive Overview + EPP · Web Access Control · Email Security ·
+  SIEM · Identity · CSPM · Platform · Reporting · Automations · AI Initiatives.
+  (SIEM and Identity are always separate sections.)
+- **Executive page:** global KPI row, 6–7 executive bullets naming specific case
+  numbers, clickable domain-overview cards, 4 Plotly charts (count by domain,
+  ARR by domain, severity pie, recent-vs-older stacked bar), and a global
+  at-risk-accounts table.
+- **Each domain page:** pastel hero banner, KPI row, executive summary, **cluster-based**
+  Top Priority Requests, a momentum bubble chart, an at-risk-accounts table, and
+  3–5 recommended actions.
+
+### Cluster-based, not one-row-per-RFE
+
+Every RFE in a domain is grouped into exactly **one** thematic cluster (e.g.
+"Kubernetes & Container Coverage", "USB & Storage Device Control") — so a domain
+page covers 100% of its requests, not just the top 10. Predefined themes match
+first; anything left over is grouped by subject-token similarity. Clusters are
+ranked by combined priority score, with a `READ FIRST` badge on rank #1.
+
+Priority score per RFE: `(ARR / 50,000) × 2 + severity_weight × 3 + recency × 2`.
+Trend badge: `NEW` ≤ 7 days, `GROWING` 8–14 days, `STABLE` older.
+
+### PM Decision Summaries (requires an LLM)
+
+Every RFE card carries a 2–4 sentence PM Decision Summary answering what is broken,
+the operational consequence, and a routing signal (`⚠️ bug/defect — route to
+engineering`, `Deal blocker`, `⚠️ Regression`, …).
+
+These are **LLM-generated** (`claude-opus-5`) and cached in the `pm_summaries` table.
+Click **🧠 Generate PM summaries** on the tab; progress is shown live and the report
+re-renders when done. Requires `ANTHROPIC_API_KEY` in `.env`.
+
+> **A raw Salesforce description is never used as a summary.** When a description is
+> missing, the report shows the mandated flag: *"⚠️ No description provided — follow
+> up with TAM before routing."* When a description exists but no summary has been
+> generated yet, the card says so explicitly rather than pasting the description.
+> This is enforced both at render time and at the storage boundary.
+
+### Assigning state
+
+Each RFE card has **Assign state** buttons that persist immediately to the
+`rfe_decisions` table via `POST /api/weekly-report/decision`. Decisions survive
+report regeneration and server restarts, and appear as a chip on the card.
+
+### Description backfill
+
+The Salesforce SOQL pull does not always include `Description`. When the latest run
+lacks one, the same case number from an earlier run (e.g. a CSV import) is used so
+summaries can still be written. The tab's status line reports how many RFEs have a
+usable description.
+
+### Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/weekly-report` | The self-contained HTML report |
+| `GET /api/weekly-report/status` | Coverage: RFE count, summaries cached, states assigned, LLM availability |
+| `POST /api/weekly-report/summaries` | Background LLM job to generate missing PM summaries |
+| `POST /api/weekly-report/decision` | Persist (or clear) an RFE's assigned state |
+
 ## RFE Mail Broker — internal test email
 
 RFE Signal Match can submit **internal test emails** to the production **RFE Mail Broker**

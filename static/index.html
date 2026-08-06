@@ -636,14 +636,14 @@ function copyMatchedId(el, text) {
 
 // ── Navigation — defined in <head> so it's ALWAYS available before body renders ──
 function _nav(page) {
-  var pages = ['sources','signal','scoring','pi-report'];
+  var pages = ['sources','signal','scoring','pi-report','weekly'];
   for (var i=0; i<pages.length; i++) {
     var el = document.getElementById('page-'+pages[i]);
     if (el) el.style.display = (pages[i]===page) ? 'block' : 'none';
     var nav = document.querySelector('[data-page="'+pages[i]+'"]');
     if (nav) { nav.classList.toggle('active', pages[i]===page); }
   }
-  var titles = {sources:'Data Sources', signal:'Signal Match', scoring:'Scoring Config', 'pi-report':'PI Report'};
+  var titles = {sources:'Data Sources', signal:'Signal Match', scoring:'Scoring Config', 'pi-report':'PI Report', weekly:'Weekly Analysis'};
   var titleEl = document.getElementById('page-title');
   if (titleEl) titleEl.textContent = titles[page] || page;
   if (page==='signal') {
@@ -658,6 +658,7 @@ function _nav(page) {
   }
   if (page==='sources') { try{loadDocs();loadStats();}catch(e){} }
   if (page==='scoring') { try{loadScoringConfig();}catch(e){} }
+  if (page==='weekly')  { try{refreshWeeklyStatus();}catch(e){} }
 }
 // Keep navigate() as alias for legacy calls in JS body
 function navigate(page) { _nav(page); }
@@ -676,6 +677,11 @@ function navigate(page) { _nav(page); }
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
     Signal Match
     <span class="nav-badge" id="badge-signal" style="display:none">0</span>
+  </a>
+
+  <a class="nav-item" data-page="weekly" href="#weekly" onclick="event.preventDefault();_nav('weekly')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9"/></svg>
+    Weekly Analysis
   </a>
 
   <a class="nav-item" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
@@ -1097,6 +1103,42 @@ function navigate(page) { _nav(page); }
       <iframe id="pi-report-iframe" src="" style="width:100%;height:85vh;border:none;border-radius:8px;display:none"></iframe>
     </div><!-- /page-pi-report -->
 
+    <!-- ══════════════════════════════════════════════
+         PAGE: Weekly Analysis (RFE state assignment)
+    ══════════════════════════════════════════════════ -->
+    <div class="page" id="page-weekly" style="display:none;padding:20px">
+      <div class="info-box" style="margin-top:4px">
+        <strong>Weekly Analysis</strong> — decide which state to assign each RFE
+        (Add to Backlog · Out of Scope · Needs Info · Deferred). Every request is
+        grouped into a thematic cluster per product domain, with a PM Decision
+        Summary explaining what is broken, the operational consequence, and the
+        routing signal. Decisions save as you click.
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" id="btn-weekly-load" onclick="loadWeeklyReport()">📈 Generate report</button>
+        <button class="btn btn-ghost btn-sm" id="btn-weekly-summaries" onclick="generateWeeklySummaries()">🧠 Generate PM summaries</button>
+        <button class="btn btn-ghost btn-sm" onclick="loadWeeklyReport(true)">↺ Refresh</button>
+        <span id="weekly-status" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
+
+      <div id="weekly-summary-progress" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:12px;box-shadow:var(--shadow)">
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px">
+          <span id="weekly-sum-label" style="color:var(--text-muted)">Generating PM summaries…</span>
+          <span id="weekly-sum-pct" style="color:var(--accent)">0%</span>
+        </div>
+        <div class="progress-wrap"><div class="progress-fill" id="weekly-sum-bar" style="width:0%"></div></div>
+      </div>
+
+      <div id="weekly-empty" class="empty-state" style="padding:40px 24px">
+        <div class="big-icon">📈</div>
+        <h3>Weekly Analysis</h3>
+        <p>Generate the report to review every open RFE by domain and assign each one a state.</p>
+        <button class="btn btn-primary" onclick="loadWeeklyReport()">📈 Generate report</button>
+      </div>
+      <iframe id="weekly-iframe" src="" style="width:100%;height:85vh;border:none;border-radius:8px;display:none"></iframe>
+    </div><!-- /page-weekly -->
+
   </div><!-- /content -->
 </div><!-- /main -->
 
@@ -1305,6 +1347,118 @@ function loadPiReport() {
 }
 function reloadPiReport() {
   loadPiReport();
+}
+
+// ─── Weekly Analysis (RFE state assignment) ───────────────────────────────────
+var _weeklyLoaded = false;
+var _weeklySumTimer = null;
+
+async function refreshWeeklyStatus() {
+  var el = document.getElementById('weekly-status');
+  var btn = document.getElementById('btn-weekly-summaries');
+  try {
+    var st = await (await fetch('/api/weekly-report/status')).json();
+    if (el) {
+      var bits = [st.total_rfes + ' RFEs',
+                  st.summaries_cached + ' PM summaries',
+                  st.decided + ' states assigned'];
+      if (st.no_description > 0) bits.push(st.no_description + ' without a description');
+      el.textContent = bits.join(' · ');
+    }
+    if (btn) {
+      if (!st.llm_available) {
+        btn.disabled = true;
+        btn.title = 'Requires ANTHROPIC_API_KEY on the server — raw descriptions are never used as summaries.';
+      } else if (st.pending === 0) {
+        btn.disabled = true;
+        btn.title = 'All eligible RFEs already have a PM summary.';
+      } else {
+        btn.disabled = false;
+        btn.title = 'Generate PM Decision Summaries for ' + st.pending + ' RFE(s)';
+        btn.textContent = '🧠 Generate PM summaries (' + st.pending + ')';
+      }
+    }
+    return st;
+  } catch (e) {
+    if (el) el.textContent = 'Status unavailable';
+    return null;
+  }
+}
+
+function loadWeeklyReport(force) {
+  var frame = document.getElementById('weekly-iframe');
+  var empty = document.getElementById('weekly-empty');
+  var btn = document.getElementById('btn-weekly-load');
+  if (!frame) return;
+  if (_weeklyLoaded && !force) { frame.style.display = 'block'; return; }
+  if (empty) empty.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  frame.style.display = 'none';
+  frame.onload = function() {
+    frame.style.display = 'block';
+    _weeklyLoaded = true;
+    if (btn) { btn.disabled = false; btn.textContent = '📈 Generate report'; }
+    refreshWeeklyStatus();
+  };
+  // cache-bust so a regenerate after new summaries/decisions is visible
+  frame.src = '/api/weekly-report?t=' + Date.now();
+}
+
+async function generateWeeklySummaries() {
+  var btn = document.getElementById('btn-weekly-summaries');
+  var panel = document.getElementById('weekly-summary-progress');
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+  try {
+    var res = await fetch('/api/weekly-report/summaries', {method: 'POST'});
+    var data = await res.json().catch(function(){ return {}; });
+    if (res.status === 501) {
+      toast('PM summaries need ANTHROPIC_API_KEY on the server', 'error');
+      if (btn) { btn.disabled = true; btn.textContent = '🧠 Generate PM summaries'; }
+      return;
+    }
+    if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+    if (!data.job_id) {
+      toast(data.message || 'Nothing to generate', 'info');
+      refreshWeeklyStatus();
+      return;
+    }
+    if (panel) panel.style.display = 'block';
+    _pollWeeklySummaries(data.job_id);
+  } catch (e) {
+    toast('Summary generation failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '🧠 Generate PM summaries'; }
+  }
+}
+
+function _pollWeeklySummaries(jobId) {
+  clearInterval(_weeklySumTimer);
+  _weeklySumTimer = setInterval(async function() {
+    try {
+      var st = await (await fetch('/api/status/' + jobId)).json();
+      var pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
+      var bar = document.getElementById('weekly-sum-bar');
+      var lab = document.getElementById('weekly-sum-label');
+      var pc  = document.getElementById('weekly-sum-pct');
+      if (bar) bar.style.width = pct + '%';
+      if (pc)  pc.textContent = pct + '%';
+      if (lab) lab.textContent = st.message || 'Generating PM summaries…';
+      if (st.status === 'complete' || st.status === 'error') {
+        clearInterval(_weeklySumTimer);
+        var btn = document.getElementById('btn-weekly-summaries');
+        if (btn) { btn.disabled = false; btn.textContent = '🧠 Generate PM summaries'; }
+        setTimeout(function() {
+          var panel = document.getElementById('weekly-summary-progress');
+          if (panel) panel.style.display = 'none';
+        }, 2500);
+        if (st.status === 'error') toast('Summaries failed: ' + st.message, 'error');
+        else {
+          toast(st.message || 'PM summaries generated', 'success');
+          loadWeeklyReport(true);   // re-render with the new summaries
+        }
+        refreshWeeklyStatus();
+      }
+    } catch (e) { /* transient — keep polling */ }
+  }, 2000);
 }
 
 // ─── CSV Import ───────────────────────────────────────────────────────────────
