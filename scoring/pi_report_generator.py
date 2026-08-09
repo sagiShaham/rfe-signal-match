@@ -201,17 +201,21 @@ def cluster_domain(rfes: List[Dict]) -> List[Dict]:
     return clusters
 
 
-def load_data(db_path: str):
-    """Load RFE data from the latest run."""
+def load_data(db_path: str, run_id: str | None = None):
+    """Load RFE data for a run.
+
+    Pass `run_id` to report on a specific uploaded dataset (independent of the
+    shared Signal Match dump); omit it for the latest shared run.
+    """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    # Get latest run_id
-    row = conn.execute("SELECT run_id FROM run_meta ORDER BY rowid DESC LIMIT 1").fetchone()
-    if not row:
-        conn.close()
-        return []
-    run_id = row["run_id"]
+    if not run_id:
+        row = conn.execute("SELECT run_id FROM run_meta ORDER BY rowid DESC LIMIT 1").fetchone()
+        if not row:
+            conn.close()
+            return []
+        run_id = row["run_id"]
 
     rows = conn.execute(
         """SELECT case_number, subject, description, account_name, account_arr,
@@ -316,15 +320,18 @@ def _render_cases_table(cases: List[Dict]) -> str:
 </tr></thead><tbody>{rows}</tbody></table>"""
 
 
-def generate_report(db_path: str) -> str:
-    """Generate a standalone HTML PI Planning report from the SQLite DB."""
-    records = load_data(db_path)
+def generate_report(db_path: str, run_id: str | None = None) -> str:
+    """Generate a standalone HTML PI Planning report from the SQLite DB.
+
+    `run_id` selects an uploaded dataset; omit it for the shared latest run.
+    """
+    records = load_data(db_path, run_id)
 
     if not records:
         return """<!DOCTYPE html><html><head><title>PI Report</title></head>
 <body style="font-family:sans-serif;padding:40px;text-align:center;color:#6b7280">
 <h2>No RFE data found</h2>
-<p>Import a CSV or pull from Salesforce first, then regenerate the report.</p>
+<p>Upload a CSV of RFEs on the PI Report tab to generate a report.</p>
 </body></html>"""
 
     # Classify domains and build clusters

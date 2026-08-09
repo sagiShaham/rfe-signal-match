@@ -77,6 +77,17 @@ def init_db():
             account_name TEXT, recipient_email TEXT, subject TEXT,
             body TEXT, status TEXT, sent_at TEXT
         );
+        -- A report built from a PM's own uploaded CSV, independent of the
+        -- shared Signal Match dump. Its rows live in rfe_pulls under run_id,
+        -- but deliberately have NO run_meta row, so they can never become
+        -- "the latest run" and hijack Signal Match.
+        CREATE TABLE IF NOT EXISTS report_datasets (
+            report_id TEXT PRIMARY KEY,
+            kind TEXT, label TEXT, source_filename TEXT,
+            run_id TEXT, rfe_count INTEGER,
+            status TEXT DEFAULT 'generating', error TEXT,
+            html TEXT, created_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS run_meta (
             run_id TEXT PRIMARY KEY,
             started_at TEXT, completed_at TEXT,
@@ -1912,6 +1923,135 @@ async def pi_report():
     from scoring.pi_report_generator import generate_report
     html = generate_report(DB_PATH)
     return HTMLResponse(content=html)
+
+# ─── Per-PM report workspaces (Weekly Analysis / PI Report) ───────────────────
+# A PM uploads their own CSV of RFEs and gets a report generated from exactly
+# that set. The rows are stored under their own run_id with NO run_meta entry,
+# so an upload here never becomes "the latest run" and never changes what
+# Signal Match shows for everyone else.
+#
+# Ownership is per-browser: the server hands back a report_id and the browser
+# keeps its own list in localStorage. There is no login, so a report_id is not
+# a secret — it is a handle, consistent with the rest of the platform.
+
+REPORT_KINDS = {"weekly", "pi"}
+
+def _check_kind(kind: str) -> str:
+    if kind not in REPORT_KINDS:
+        raise HTTPException(404, f"Unknown report kind '{kind}'.")
+    return kind
+
+def _generate_report_dataset(report_id: str, kind: str, run_id: str) -> None:
+    """Background job: render the report for an uploaded dataset and store it.
+    Runs for as long as it needs — the UI polls for completion."""
+    try:
+        if kind == "weekly":
+            from scoring.weekly_report_generator import generate_report as _gen
+        else:
+            from scoring.pi_report_generator import generate_report as _gen
+        html = _gen(DB_PATH, run_id)
+        conn = get_db()
+        conn.execute("UPDATE report_datasets SET status='ready', html=?, error=NULL "
+                     "WHERE report_id=?", (html, report_id))
+        conn.commit(); conn.close()
+    except Exception as e:
+        try:
+            conn = get_db()
+            conn.execute("UPDATE report_datasets SET status='error', error=? WHERE report_id=?",
+                         (str(e)[:500], report_id))
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+
+@app.post("/api/reports/{kind}/upload")
+async def api_report_upload(kind: str, background: BackgroundTasks,
+                            file: UploadFile = File(...), label: str = Form("")):
+    _check_kind(kind)
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    col_map = detect_columns(list(reader.fieldnames or []))
+    records = list(reader)
+    if not records:
+        raise HTTPException(400, "That CSV has no rows.")
+
+    report_id = str(uuid.uuid4())
+    run_id = f"report-{report_id}"      # namespaced; never written to run_meta
+    now = datetime.utcnow().isoformat()
+    conn = get_db(); cur = conn.cursor()
+    for rec in records:
+        def g(field):
+            col = col_map.get(field)
+            return (rec.get(col) or "").strip() if col else ""
+        cur.execute(
+            "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
+            "account_arr,status,domain,sub_domain,severity,created_date,pulled_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, g("case_number"), g("subject"), g("description"), g("account_name"),
+             parse_arr(g("account_arr")), g("status"), g("domain"), g("sub_domain"),
+             g("severity"), g("created_date"), now))
+
+    # Same domain inference the shared import does, so grouping behaves alike.
+    for br in cur.execute("SELECT id, subject, description FROM rfe_pulls "
+                          "WHERE run_id=? AND (domain IS NULL OR domain='')",
+                          (run_id,)).fetchall():
+        inferred = _map_domain("", f"{br['subject'] or ''} {br['description'] or ''}")
+        if inferred and inferred != "Other":
+            conn.execute("UPDATE rfe_pulls SET domain=? WHERE id=?", (inferred, br["id"]))
+
+    clean_label = (label or "").strip() or (file.filename or "Untitled").rsplit(".", 1)[0]
+    cur.execute("INSERT INTO report_datasets (report_id,kind,label,source_filename,run_id,"
+                "rfe_count,status,created_at) VALUES (?,?,?,?,?,?, 'generating', ?)",
+                (report_id, kind, clean_label[:120], file.filename or "", run_id,
+                 len(records), now))
+    conn.commit(); conn.close()
+
+    background.add_task(_generate_report_dataset, report_id, kind, run_id)
+    return {"report_id": report_id, "kind": kind, "label": clean_label,
+            "rfe_count": len(records), "status": "generating", "created_at": now}
+
+@app.get("/api/reports/{kind}/{report_id}/status")
+async def api_report_status(kind: str, report_id: str):
+    _check_kind(kind)
+    conn = get_db()
+    row = conn.execute("SELECT report_id,kind,label,rfe_count,status,error,created_at "
+                       "FROM report_datasets WHERE report_id=? AND kind=?",
+                       (report_id, kind)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Report not found.")
+    return dict(row)
+
+@app.get("/api/reports/{kind}/{report_id}", response_class=HTMLResponse)
+async def api_report_html(kind: str, report_id: str):
+    _check_kind(kind)
+    conn = get_db()
+    row = conn.execute("SELECT status,html,error FROM report_datasets "
+                       "WHERE report_id=? AND kind=?", (report_id, kind)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Report not found.")
+    if row["status"] != "ready":
+        raise HTTPException(409, f"Report is not ready ({row['status']}).")
+    return HTMLResponse(content=row["html"],
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+@app.delete("/api/reports/{kind}/{report_id}")
+async def api_report_delete(kind: str, report_id: str):
+    _check_kind(kind)
+    conn = get_db()
+    row = conn.execute("SELECT run_id FROM report_datasets WHERE report_id=? AND kind=?",
+                       (report_id, kind)).fetchone()
+    if not row:
+        conn.close(); raise HTTPException(404, "Report not found.")
+    conn.execute("DELETE FROM rfe_pulls WHERE run_id=?", (row["run_id"],))
+    conn.execute("DELETE FROM report_datasets WHERE report_id=?", (report_id,))
+    conn.commit(); conn.close()
+    return {"deleted": True, "report_id": report_id}
 
 # ─── Weekly Analysis (RFE state-assignment report) ────────────────────────────
 # Implements the Cynet weekly/bi-weekly report skill natively from the DB.
