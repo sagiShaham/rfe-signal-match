@@ -265,6 +265,14 @@ input:checked+.toggle-slider:before{transform:translateX(18px)}
 .nav-sep{border-top:1px solid var(--border)}
 .sidebar-footer{color:var(--faint,#94a3b8)}
 .nav-adv-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9aa4b6;padding:0 10px 6px}
+/* Data Sources sits under Signal Match as a sub-item */
+.nav-sub{margin-left:14px;font-size:12.5px}
+.nav-sub::before{content:"";position:absolute;left:-10px;top:50%;width:6px;height:1px;background:var(--border)}
+.nav-sub{position:relative}
+.nav-beta{margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(251,191,36,.18);color:#f59e0b;border:1px solid rgba(245,158,11,.35);border-radius:4px;padding:1px 5px;line-height:1.5;text-transform:uppercase}
+/* Signal Match shared-data banner */
+.shared-data-note{display:flex;align-items:flex-start;gap:9px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:8px;padding:9px 12px;font-size:12px;line-height:1.55;margin-bottom:14px}
+.shared-data-note strong{font-weight:700}
 
 /* Summary tiles */
 .sig-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0 18px}
@@ -644,21 +652,25 @@ function navigate(page) { _nav(page); }
     <span class="nav-badge" id="badge-signal" style="display:none">0</span>
   </a>
 
-  <a class="nav-item" data-page="weekly" href="#weekly" onclick="event.preventDefault();_nav('weekly')" style="display:flex">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9"/></svg>
-    Weekly Analysis
-  </a>
-
-  <a class="nav-item" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
+  <a class="nav-item nav-sub" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     Data Sources
     <span class="nav-badge" id="badge-sources" style="display:none"></span>
   </a>
 
+  <div class="nav-sep"></div>
+  <div class="nav-adv-label">Other tools</div>
+
+  <a class="nav-item" data-page="weekly" href="#weekly" onclick="event.preventDefault();_nav('weekly')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9"/></svg>
+    Weekly Analysis
+    <span class="nav-beta">Beta</span>
+  </a>
+
   <a class="nav-item" data-page="pi-report" href="#pi-report" onclick="event.preventDefault();_nav('pi-report')" style="display:flex">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><polyline points="7 15 10 12 13 15 17 11"/></svg>
     PI Report
-    <span style="margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(251,191,36,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:4px;padding:1px 5px;line-height:1.5;text-transform:uppercase">Beta</span>
+    <span class="nav-beta">Beta</span>
   </a>
 
   <div class="nav-sep"></div>
@@ -825,6 +837,12 @@ function navigate(page) { _nav(page); }
          PAGE: Signal Match
     ══════════════════════════════════════════════════ -->
     <div class="page active" id="page-signal">
+
+      <!-- Shared-dataset warning: everyone sees the same last upload -->
+      <div class="shared-data-note">
+        <span style="flex-shrink:0">ℹ️</span>
+        <div><strong>Shared view.</strong> This shows the <strong>most recent RFE upload</strong><span id="sig-data-meta"></span>. It is shared by everyone — uploading a new dump on <a href="#sources" onclick="event.preventDefault();_nav('sources')">Data Sources</a> replaces it for all PMs. For a report on your own set of RFEs without affecting anyone, use <a href="#weekly" onclick="event.preventDefault();_nav('weekly')">Weekly Analysis</a>.</div>
+      </div>
 
       <!-- Summary tiles -->
       <div class="sig-tiles">
@@ -2015,6 +2033,17 @@ async function loadStats() {
     const res = await fetch('/api/stats');
     const s = await res.json();
     document.getElementById('stat-total').textContent = s.total ?? '—';
+    // Name the dump behind the shared view, so "whose data is this?" is answerable.
+    const metaEl = document.getElementById('sig-data-meta');
+    if (metaEl) {
+      const when = fmtDate(s.started_at);
+      const via = s.source === 'salesforce' ? 'Salesforce pull' : s.source === 'csv' ? 'CSV upload' : '';
+      const bits = [];
+      if (s.rfe_count) bits.push(s.rfe_count + ' RFEs');
+      if (via) bits.push(via);
+      if (when) bits.push(when);
+      metaEl.textContent = bits.length ? ' (' + bits.join(' · ') + ')' : '';
+    }
     const matchedRfeEl = document.getElementById('stat-matched-rfes');
     if (matchedRfeEl) matchedRfeEl.textContent = s.matched_rfe_count ?? '—';
     const rfeEl = document.getElementById('stat-rfe-big');
