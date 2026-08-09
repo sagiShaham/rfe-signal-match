@@ -2,7 +2,7 @@ import os, io, csv, json, uuid, asyncio, sqlite3, itertools, re, threading
 import datetime as _dt
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from collections import defaultdict
@@ -1941,6 +1941,106 @@ def _check_kind(kind: str) -> str:
         raise HTTPException(404, f"Unknown report kind '{kind}'.")
     return kind
 
+def _cell_to_text(value) -> str:
+    """Render a spreadsheet cell as the string the CSV path would have given.
+    Excel stores numbers and dates as typed values, so 120000 must not become
+    '120000.0' and a date must not become 'datetime.datetime(...)'."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return value.strftime("%Y-%m-%d")
+    return str(value).strip()
+
+def _rows_from_sheet(rows) -> List[dict]:
+    """Turn an iterable of cell-value rows into DictReader-style dicts, using
+    the first non-empty row as the header."""
+    header, out = None, []
+    for raw in rows:
+        cells = [_cell_to_text(c) for c in raw]
+        if header is None:
+            if not any(cells):
+                continue                       # skip leading blank rows
+            header = [c.strip() for c in cells]
+            continue
+        if not any(cells):
+            continue                           # skip blank body rows
+        out.append({header[i]: cells[i] for i in range(min(len(header), len(cells)))})
+    return out
+
+def parse_rfe_upload(filename: str, content: bytes) -> Tuple[List[dict], List[str]]:
+    """Parse an uploaded RFE file into (rows, headers).
+
+    Accepts .csv, .xlsx/.xlsm and legacy .xls. The Excel readers are imported
+    lazily and report a clear, actionable error if the library is absent, so a
+    missing optional dependency can never stop the app from starting.
+    """
+    name = (filename or "").lower()
+
+    if name.endswith((".xlsx", ".xlsm")):
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(501, "Reading .xlsx needs the 'openpyxl' package on "
+                                     "the server. Save the file as CSV, or ask an "
+                                     "administrator to run: pip install openpyxl")
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            rows = _rows_from_sheet(wb[wb.sheetnames[0]].iter_rows(values_only=True))
+            wb.close()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that Excel file: {str(e)[:200]}")
+
+    elif name.endswith(".xls"):
+        try:
+            import xlrd
+        except ImportError:
+            raise HTTPException(501, "Reading legacy .xls needs the 'xlrd' package on "
+                                     "the server. Save the file as CSV or .xlsx, or ask "
+                                     "an administrator to run: pip install xlrd")
+        try:
+            book = xlrd.open_workbook(file_contents=content)
+            sheet = book.sheet_by_index(0)
+
+            def _xls_rows():
+                # xlrd hands back dates as raw Excel serial numbers (e.g. 46235)
+                # with the type flagged on the cell, so they must be converted
+                # here — otherwise created_date is nonsense and the report's
+                # recency scoring and NEW/GROWING badges are silently wrong.
+                for r in range(sheet.nrows):
+                    out = []
+                    for cell in sheet.row(r):
+                        if cell.ctype == xlrd.XL_CELL_DATE:
+                            try:
+                                out.append(xlrd.xldate_as_datetime(cell.value, book.datemode))
+                                continue
+                            except Exception:
+                                pass
+                        out.append(cell.value)
+                    yield out
+
+            rows = _rows_from_sheet(_xls_rows())
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that Excel file: {str(e)[:200]}")
+
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+        return rows, list(reader.fieldnames or [])
+
+    return rows, (list(rows[0].keys()) if rows else [])
+
 def _generate_report_dataset(report_id: str, kind: str, run_id: str) -> None:
     """Background job: render the report for an uploaded dataset and store it.
     Runs for as long as it needs — the UI polls for completion."""
@@ -1968,16 +2068,14 @@ async def api_report_upload(kind: str, background: BackgroundTasks,
                             file: UploadFile = File(...), label: str = Form("")):
     _check_kind(kind)
     content = await file.read()
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = content.decode("latin-1")
-
-    reader = csv.DictReader(io.StringIO(text))
-    col_map = detect_columns(list(reader.fieldnames or []))
-    records = list(reader)
+    records, headers = parse_rfe_upload(file.filename or "", content)
+    col_map = detect_columns(headers)
     if not records:
-        raise HTTPException(400, "That CSV has no rows.")
+        raise HTTPException(400, "That file has no rows.")
+    if not col_map.get("case_number") and not col_map.get("subject"):
+        raise HTTPException(400,
+            "Could not find a case number or subject column. Expected headers like "
+            "'Case Number' and 'Subject'. Found: " + (", ".join(headers[:12]) or "none"))
 
     report_id = str(uuid.uuid4())
     run_id = f"report-{report_id}"      # namespaced; never written to run_meta

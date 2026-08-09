@@ -1351,12 +1351,12 @@ function renderWorkspace(kind) {
   host.innerHTML =
     '<div class="ws-bar">' +
       '<button class="btn btn-primary btn-sm" onclick="wsPick(\'' + kind + '\')">＋ New report</button>' +
-      '<input type="file" accept=".csv" id="ws-file-' + kind + '" style="display:none" ' +
+      '<input type="file" accept=".csv,.xlsx,.xlsm,.xls" id="ws-file-' + kind + '" style="display:none" ' +
         'onchange="wsUpload(\'' + kind + '\', this)">' +
       (kind === 'weekly'
         ? '<button class="btn btn-ghost btn-sm" id="btn-weekly-summaries" onclick="generateWeeklySummaries()">🧠 Generate PM summaries</button>'
         : '') +
-      '<span class="ws-hint">Upload a CSV of RFEs — same columns as the Data Sources import.</span>' +
+      '<span class="ws-hint">Upload a CSV or Excel file of RFEs — same columns as the Data Sources import.</span>' +
     '</div>' +
     (list.length
       ? '<div class="ws-list"><div class="ws-list-label">My reports (saved in this browser)</div>' + rows + '</div>'
@@ -1391,8 +1391,10 @@ function wsPick(kind) {
 async function wsUpload(kind, input) {
   var file = input && input.files && input.files[0];
   if (!file) return;
-  if (!/\.csv$/i.test(file.name)) { toast('Please choose a .csv file', 'error'); return; }
-  var label = prompt('Name this report:', file.name.replace(/\.csv$/i, ''));
+  if (!/\.(csv|xlsx|xlsm|xls)$/i.test(file.name)) {
+    toast('Please choose a .csv, .xlsx or .xls file', 'error'); return;
+  }
+  var label = prompt('Name this report:', file.name.replace(/\.(csv|xlsx|xlsm|xls)$/i, ''));
   if (label === null) return;                       // cancelled
   var fd = new FormData();
   fd.append('file', file);
