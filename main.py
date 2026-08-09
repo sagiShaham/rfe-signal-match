@@ -1876,12 +1876,12 @@ async def api_send_email_graph(req: LogEmailRequest):
     await api_log_email(LogEmailRequest(**{**req.dict(), "via": "graph"}))
     return {"sent": True}
 
-# ─── RFE Mail Broker — internal TEST email only ───────────────────────────────
-# Submits controlled internal test batches to the production RFE Mail Broker and
-# reports their status. This is TEST-ONLY: recipients are restricted to the
-# allowed @cynet.com domain, subjects are forced to a [TEST] prefix, and the
-# batch size is capped. There is deliberately no real-customer/bulk send path
-# here — that workflow is owned separately by Sagi in the broker review portal.
+# ─── RFE Mail Broker — email send ─────────────────────────────────────────────
+# Submits batches to the production RFE Mail Broker and reports their status.
+# Recipients may be on ANY domain, including real customers. Submitting only
+# *stages* a batch as PendingReview — the broker's Entra-gated review portal
+# still has to approve it before anything is delivered, so this endpoint cannot
+# cause an email to be sent on its own.
 # The broker Function keys live only in server env and are never sent to the
 # browser. The reviewUrl is a temporary credential and is never logged.
 
@@ -1912,7 +1912,7 @@ async def api_test_email_submit(req: TestEmailSubmitRequest):
     try:
         payload = broker_client.build_test_batch(
             recipient=req.recipient, subject=req.subject, body=req.body,
-            domain=cfg.allowed_domain, rfe_id=req.rfe_id,
+            rfe_id=req.rfe_id,
             customer_id=req.customer_id, customer_name=req.customer_name)
         result = await broker_client.submit_batch(payload)
     except broker_client.BrokerError as e:
@@ -1926,8 +1926,8 @@ async def api_test_email_submit(req: TestEmailSubmitRequest):
             "INSERT INTO email_log (run_id,cluster_id,case_number,account_name,"
             "recipient_email,subject,body,status,sent_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (None, req.cluster_id, req.rfe_id, req.customer_name,
-             msg["recipient"], msg["subject"], "[internal test batch submitted to broker]",
-             f"test_{result.get('status', 'submitted')}", datetime.utcnow().isoformat()))
+             msg["recipient"], msg["subject"], "[batch submitted to broker for review]",
+             f"broker_{result.get('status', 'submitted')}", datetime.utcnow().isoformat()))
         conn.commit(); conn.close()
     except Exception:
         pass

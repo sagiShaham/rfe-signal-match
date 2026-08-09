@@ -1,13 +1,14 @@
 """
-RFE Mail Broker client — TEST-EMAIL ONLY.
+RFE Mail Broker client.
 ====================================================================
 Thin server-side client for the production RFE Mail Broker Azure Function.
 
-Scope guard: this module only ever builds and submits *internal test* batches
-(recipients restricted to a single allowed domain, subjects forced to a
-"[TEST]" prefix, small batch cap). It deliberately has no path for real
-customer/bulk delivery — that workflow is owned separately by Sagi and lives in
-the broker's own Entra-authenticated review portal.
+Recipients may be on any domain, including real customers. What keeps that safe
+is not this module — it is the broker's own review step: submitting only
+*stages* a batch as PendingReview. Nothing is delivered until someone on the
+broker's Entra allowlist (RFE_REVIEWER_EMAILS) approves it in the review portal.
+This module therefore validates and stages; it can never cause an email to be
+sent on its own.
 
 Security notes:
 - The submit/status Function keys are read from the environment on the server
@@ -28,11 +29,12 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 # ── Constants ────────────────────────────────────────────────────────────────
-DEFAULT_ALLOWED_DOMAIN = "cynet.com"
-MAX_TEST_BATCH = 5           # hard cap on messages per test batch
-SUBJECT_PREFIX = "[TEST]"
+MAX_TEST_BATCH = 5           # hard cap on messages per batch
 _REQUEST_TIMEOUT = 15.0      # seconds, per broker call
 _ID_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+# Mirrors the broker's own recipient rule (broker/validation.py) — syntax only,
+# no domain restriction, since recipients may be real customers.
+_EMAIL_RE = re.compile(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$")
 
 
 class BrokerConfigError(RuntimeError):
@@ -55,7 +57,6 @@ class BrokerConfig:
     submit_key: str
     status_key: str
     test_mode: bool
-    allowed_domain: str
 
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -65,10 +66,6 @@ def _env(name: str, default: str = "") -> str:
 
 def _test_mode_from_env() -> bool:
     return _env("RFE_BROKER_TEST_MODE", "true").lower() in ("1", "true", "yes", "on")
-
-
-def _allowed_domain_from_env() -> str:
-    return _env("RFE_BROKER_ALLOWED_TEST_DOMAIN", DEFAULT_ALLOWED_DOMAIN).lower() or DEFAULT_ALLOWED_DOMAIN
 
 
 def get_config() -> BrokerConfig:
@@ -93,7 +90,6 @@ def get_config() -> BrokerConfig:
         submit_key=submit,
         status_key=status,
         test_mode=_test_mode_from_env(),
-        allowed_domain=_allowed_domain_from_env(),
     )
 
 
@@ -107,52 +103,48 @@ def is_configured() -> bool:
 
 def config_status() -> dict:
     """Safe, secret-free view of the broker config for the frontend to decide
-    whether to enable the test-send action."""
-    domain = _allowed_domain_from_env()
+    whether to enable the send action."""
     test_mode = _test_mode_from_env()
     try:
         cfg = get_config()
         return {
             "configured": True,
             "test_mode": cfg.test_mode,
-            "allowed_domain": cfg.allowed_domain,
+            "any_domain": True,
             "max_batch": MAX_TEST_BATCH,
         }
     except BrokerConfigError as exc:
         return {
             "configured": False,
             "test_mode": test_mode,
-            "allowed_domain": domain,
+            "any_domain": True,
             "max_batch": MAX_TEST_BATCH,
             "reason": str(exc),
         }
 
 
 # ── Validation & normalization (pure) ────────────────────────────────────────
-def valid_recipient(addr: str, domain: str) -> bool:
-    """True only for `local@<domain>` exactly. Rejects subdomains
-    (`x@a.cynet.com`), suffix tricks (`x@cynet.com.attacker.tld`), double-@,
-    and whitespace."""
-    candidate = (addr or "").strip().lower()
-    pattern = r"[^@\s]+@" + re.escape(domain.lower())
-    return re.fullmatch(pattern, candidate) is not None
+def valid_recipient(addr: str) -> bool:
+    """Syntactic check only — any domain is allowed. Still rejects double-@,
+    whitespace, angle brackets and addresses with no dotted domain."""
+    return _EMAIL_RE.fullmatch((addr or "").strip()) is not None
 
 
-def validate_recipient(addr: str, domain: str) -> str:
+def validate_recipient(addr: str) -> str:
     if not (addr or "").strip():
-        raise BrokerError("A test recipient email address is required.", 400)
-    if not valid_recipient(addr, domain):
-        raise BrokerError(f"Test recipient must be a valid @{domain} address.", 400)
-    return addr.strip().lower()
+        raise BrokerError("A recipient email address is required.", 400)
+    cleaned = addr.strip()
+    if not valid_recipient(cleaned):
+        raise BrokerError(f"'{cleaned}' is not a valid email address.", 400)
+    return cleaned.lower()
 
 
-def ensure_test_subject(subject: str) -> str:
-    """Force the subject to begin with the [TEST] prefix."""
+def ensure_subject(subject: str) -> str:
+    """Subjects are used verbatim. No prefix is forced — a recipient may be a
+    real customer, for whom a '[TEST]' marker would be wrong."""
     text = (subject or "").strip()
     if not text:
         raise BrokerError("An email subject is required.", 400)
-    if not text.startswith(SUBJECT_PREFIX):
-        text = f"{SUBJECT_PREFIX} {text}"
     return text
 
 
@@ -165,10 +157,10 @@ def validate_body(body: str) -> str:
 def validate_batch_size(messages: list) -> None:
     count = len(messages or [])
     if count < 1:
-        raise BrokerError("A test batch must contain at least one message.", 400)
+        raise BrokerError("A batch must contain at least one message.", 400)
     if count > MAX_TEST_BATCH:
         raise BrokerError(
-            f"A test batch may contain at most {MAX_TEST_BATCH} messages "
+            f"A batch may contain at most {MAX_TEST_BATCH} messages "
             f"(got {count}).",
             400,
         )
@@ -192,10 +184,10 @@ def _safe_id(value: str, fallback: str) -> str:
 
 
 def new_batch_id() -> str:
-    """RFE-TEST-<utc-timestamp>-<random>. Matches the broker's batchId charset
+    """RFE-MAIL-<utc-timestamp>-<random>. Matches the broker's batchId charset
     (^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$)."""
     stamp = _dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    return f"RFE-TEST-{stamp}-{uuid.uuid4().hex[:6]}"
+    return f"RFE-MAIL-{stamp}-{uuid.uuid4().hex[:6]}"
 
 
 def build_test_batch(
@@ -203,7 +195,6 @@ def build_test_batch(
     recipient: str,
     subject: str,
     body: str,
-    domain: str,
     rfe_id: str | None = None,
     customer_id: str | None = None,
     customer_name: str | None = None,
@@ -215,13 +206,13 @@ def build_test_batch(
     the broker (product-notifications@cynet.com). CC / Reply-To are unsupported
     by the broker and are intentionally not included.
     """
-    recipient = validate_recipient(recipient, domain)
-    subject = ensure_test_subject(subject)
+    recipient = validate_recipient(recipient)
+    subject = ensure_subject(subject)
     validate_body(body)
 
-    rfe = (rfe_id or "RFE-TEST").strip() or "RFE-TEST"
-    cust_id = (customer_id or "CYNET-INTERNAL").strip() or "CYNET-INTERNAL"
-    cust_name = (customer_name or "Cynet Internal").strip() or "Cynet Internal"
+    rfe = (rfe_id or "RFE").strip() or "RFE"
+    cust_id = (customer_id or "UNKNOWN").strip() or "UNKNOWN"
+    cust_name = (customer_name or "Unknown").strip() or "Unknown"
     batch_id = batch_id or new_batch_id()
     item_id = (_safe_id(f"{rfe}-{cust_id}", fallback="item") + "-001")[:120]
 
@@ -386,5 +377,5 @@ async def get_status(batch_id: str) -> dict:
     if response.status_code == 200:
         return sanitize_status(data)
     if response.status_code == 404:
-        raise BrokerError("Test batch not found.", 404)
+        raise BrokerError("Batch not found.", 404)
     _raise_for_status(response.status_code, data, getattr(response, "text", ""), cfg)
