@@ -2475,14 +2475,20 @@ function openTestDrawer() {
   var selEl = document.getElementById('email-rfe-sel');
   var selId = selEl ? parseInt(selEl.value) : null;
   var member = (selId ? members.find(function(m){ return m.id === selId; }) : null) || members[0] || {};
+  var toEl = document.getElementById('email-to');
   var subjEl = document.getElementById('email-subject');
   var bodyEl = document.getElementById('email-body');
+  // The draft's To field renders as an <input> in one drawer and a <div> in the
+  // other, so read both. '—' is the placeholder shown when there is no address.
+  var curTo = toEl ? (toEl.value || toEl.textContent || '').trim() : '';
+  if (curTo === '—') curTo = '';
   var curSubject = subjEl ? (subjEl.value || subjEl.textContent || '') : '';
   var curBody = bodyEl ? (bodyEl.value || bodyEl.textContent || '') : '';
   _testCtx = {
     cluster_id: drawerClusterId,
     rfe_id: member.case_number || null,
     customer_name: member.account_name || (cluster && cluster.cluster_title) || 'Cynet Internal',
+    recipient: curTo,
     subject: curSubject,
     body: curBody
   };
@@ -2519,8 +2525,13 @@ async function _renderTestForm() {
   }
   submitBtn.disabled = false;
 
-  var lastRecip = '';
-  try { lastRecip = localStorage.getItem('rfe_test_recipient') || ''; } catch (e) {}
+  // Carry the draft's own recipient across. Only fall back to the last address
+  // used if the draft has none, so a stale value can never silently replace the
+  // customer contact you are looking at.
+  var defRecip = _testCtx.recipient || '';
+  if (!defRecip) {
+    try { defRecip = localStorage.getItem('rfe_test_recipient') || ''; } catch (e) {}
+  }
   var defSubject = _testCtx.subject || '';
 
   body.innerHTML =
@@ -2529,7 +2540,7 @@ async function _renderTestForm() {
       'RFE Mail Broker as <strong>PendingReview</strong>, and is only delivered once an ' +
       'authorized reviewer approves it in the broker review portal.</div>' +
     '<div class="email-field"><label>Recipient</label>' +
-      '<input class="email-input" id="test-recipient" placeholder="name@company.com" value="' + esc(lastRecip) + '"></div>' +
+      '<input class="email-input" id="test-recipient" placeholder="name@company.com" value="' + esc(defRecip) + '"></div>' +
     '<div class="email-field"><label>Subject</label>' +
       '<input class="email-input" id="test-subject" value="' + esc(defSubject) + '"></div>' +
     '<div class="email-field"><label>CC</label>' +
