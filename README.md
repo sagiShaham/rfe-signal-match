@@ -274,10 +274,15 @@ A portfolio-level strategic demand report generated natively from the RFE data i
 ### ✉️ Outlook / email integration
 The email drawer (Signal Match → expand cluster → Generate Email) now supports sending, not just copying.
 - **Editable To** (customer contact) + **CC** (CSM / stakeholders) + editable Subject/Body
-- **📤 Send Email** — sends directly via Office 365 SMTP (`POST /api/send-email-smtp`). No Azure/Entra app registration needed; requires `SMTP_USER` / `SMTP_PASS` in `.env` and SMTP AUTH enabled on the mailbox.
-- **✉️ Outlook draft** — opens a pre-filled draft in the user's own Outlook via `mailto:` (zero setup, always works)
-- **Microsoft Graph path** — `POST /api/send-email-graph` for fully-automated service-mailbox sending. Requires an Azure AD app registration with `Mail.Send`; set `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` / `GRAPH_SENDER_UPN`.
-- Every send/draft is logged to the `email_log` table for audit (`sent_smtp` / `sent_graph` / `drafted_outlook`)
+- **📤 Send via Mail Broker** — the only send path. Stages the email in the RFE Mail Broker for review; a reviewer approves before it is delivered. See [RFE Mail Broker](#rfe-mail-broker--sending-email).
+- **✉️ Outlook draft** — opens a pre-filled draft in the user's own Outlook via `mailto:` (zero setup, always works). Sends nothing itself — you press send in Outlook.
+- **📋 Copy** — copies the drafted text to the clipboard.
+- Every send/draft is logged to the `email_log` table for audit.
+
+> **Removed in v2.3:** the old **📤 Send Email** button and the `POST /api/send-email-smtp`
+> and `POST /api/send-email-graph` endpoints. Both delivered mail with no review and no
+> approval, and the app has no authentication, so anyone able to reach it could have called
+> them. Do not reintroduce a direct-send path.
 
 ### ☁️ Live Salesforce pull
 The "Salesforce API" card on Data Sources now pulls RFE cases live via SOQL (`POST /api/pull`) — no manual CSV export.
@@ -289,11 +294,10 @@ The "Salesforce API" card on Data Sources now pulls RFE cases live via SOQL (`PO
 
 | Variable | Purpose | Required for |
 |---|---|---|
-| `SMTP_USER`, `SMTP_PASS` | Office 365 mailbox for sending | 📤 Send Email |
-| `SMTP_HOST`, `SMTP_PORT` | Defaults `smtp.office365.com` / `587` | (optional) |
-| `SMTP_FROM` | From address (defaults to `SMTP_USER`) | (optional) |
-| `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `GRAPH_SENDER_UPN` | Azure AD app for Graph send | Graph send (optional) |
 | `SF_USERNAME`, `SF_PASSWORD`, `SF_SECURITY_TOKEN`, `SF_DOMAIN` | Salesforce API pull | ☁️ SF pull |
+
+The `SMTP_*` and `GRAPH_*` variables are gone — they configured the direct-send endpoints
+removed in v2.3. Sending is configured via `RFE_BROKER_*` instead.
 
 ---
 
