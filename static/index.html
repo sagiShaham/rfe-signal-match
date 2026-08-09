@@ -285,6 +285,15 @@ input:checked+.toggle-slider:before{transform:translateX(18px)}
 .ws-badge.ready{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
 .ws-badge.gen{background:#e0f2fe;color:#075985;border:1px solid #bae6fd}
 .ws-badge.err{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.ws-row-meta.err{color:#b91c1c}
+.ws-progress{height:4px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px;max-width:340px}
+.ws-progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
+/* Name-this-report dialog (replaces the browser's prompt() popup) */
+.ws-modal-back{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px}
+.ws-modal{background:var(--card);border-radius:var(--radius);box-shadow:0 20px 60px rgba(0,0,0,.28);padding:22px 24px;width:100%;max-width:420px}
+.ws-modal-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.ws-modal-sub{font-size:12.5px;color:var(--text-muted);margin-bottom:14px}
+.ws-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 /* Signal Match shared-data banner */
 .shared-data-note{display:flex;align-items:flex-start;gap:9px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:8px;padding:9px 12px;font-size:12px;line-height:1.55;margin-bottom:14px}
 .shared-data-note strong{font-weight:700}
@@ -1332,16 +1341,25 @@ function renderWorkspace(kind) {
     var badge = r.status === 'ready'
       ? '<span class="ws-badge ready">Ready</span>'
       : r.status === 'error'
-        ? '<span class="ws-badge err">Failed</span>'
-        : '<span class="ws-badge gen"><span class="spinner" style="width:9px;height:9px;border-width:2px;border-top-color:currentColor;border-color:rgba(0,0,0,.15)"></span> Building…</span>';
+        ? '<span class="ws-badge err" title="' + esc(r.error || '') + '">Failed</span>'
+        : '<span class="ws-badge gen"><span class="spinner" style="width:9px;height:9px;border-width:2px;border-top-color:currentColor;border-color:rgba(0,0,0,.15)"></span> ' +
+            Math.max(0, Math.min(100, r.pct || 0)) + '%</span>';
     var open = r.status === 'ready'
       ? '<button class="btn btn-primary btn-sm" onclick="wsOpen(\'' + kind + '\',\'' + r.id + '\')">Open</button>'
       : '';
+    // While building, the row shows the actual stage and a progress bar rather
+    // than an unexplained spinner.
+    var meta = r.status === 'generating'
+      ? '<div class="ws-row-meta">' + esc(r.stage || 'Starting…') + '</div>' +
+        '<div class="ws-progress"><div class="ws-progress-fill" style="width:' +
+          Math.max(2, Math.min(100, r.pct || 0)) + '%"></div></div>'
+      : r.status === 'error'
+        ? '<div class="ws-row-meta err">' + esc(r.error || 'Generation failed') + '</div>'
+        : '<div class="ws-row-meta">' + (r.rfe_count || 0) + ' RFEs · ' +
+            esc(fmtDate(r.created_at) || '') + '</div>';
     return '<div class="ws-row' + (_wsOpen[kind] === r.id ? ' active' : '') + '">' +
       '<div style="flex:1;min-width:0">' +
-        '<div class="ws-row-title">' + esc(r.label) + '</div>' +
-        '<div class="ws-row-meta">' + (r.rfe_count || 0) + ' RFEs · ' +
-          esc(fmtDate(r.created_at) || '') + '</div>' +
+        '<div class="ws-row-title">' + esc(r.label) + '</div>' + meta +
       '</div>' + badge + open +
       '<button class="btn btn-ghost btn-sm" title="Delete this report" ' +
         'onclick="wsDelete(\'' + kind + '\',\'' + r.id + '\')">🗑</button>' +
@@ -1388,13 +1406,44 @@ function wsPick(kind) {
   if (el) { el.value = ''; el.click(); }
 }
 
+// Replaces the browser's prompt() dialog, which showed a raw "localhost:8099
+// says" chrome popup and looked like a phishing box.
+function _wsAskName(defaultName) {
+  return new Promise(function(resolve) {
+    var back = document.createElement('div');
+    back.className = 'ws-modal-back';
+    back.innerHTML =
+      '<div class="ws-modal" role="dialog" aria-modal="true">' +
+        '<div class="ws-modal-title">Name this report</div>' +
+        '<div class="ws-modal-sub">So you can find it again in your list.</div>' +
+        '<input class="email-input" id="ws-name-input" maxlength="120">' +
+        '<div class="ws-modal-actions">' +
+          '<button class="btn btn-ghost btn-sm" data-act="cancel">Cancel</button>' +
+          '<button class="btn btn-primary btn-sm" data-act="ok">Create report</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(back);
+    var input = back.querySelector('#ws-name-input');
+    input.value = defaultName || '';
+    var done = function(val) { back.remove(); resolve(val); };
+    back.querySelector('[data-act="cancel"]').onclick = function() { done(null); };
+    back.querySelector('[data-act="ok"]').onclick = function() { done(input.value.trim()); };
+    back.onclick = function(e) { if (e.target === back) done(null); };
+    input.onkeydown = function(e) {
+      if (e.key === 'Enter') done(input.value.trim());
+      if (e.key === 'Escape') done(null);
+    };
+    setTimeout(function() { input.focus(); input.select(); }, 30);
+  });
+}
+
 async function wsUpload(kind, input) {
   var file = input && input.files && input.files[0];
   if (!file) return;
-  if (!/\.(csv|xlsx|xlsm|xls)$/i.test(file.name)) {
+  if (!/\.(csv|xlsx|xlsm|xls|tsv|txt)$/i.test(file.name)) {
     toast('Please choose a .csv, .xlsx or .xls file', 'error'); return;
   }
-  var label = prompt('Name this report:', file.name.replace(/\.(csv|xlsx|xlsm|xls)$/i, ''));
+  var label = await _wsAskName(file.name.replace(/\.(csv|xlsx|xlsm|xls|tsv|txt)$/i, ''));
   if (label === null) return;                       // cancelled
   var fd = new FormData();
   fd.append('file', file);
@@ -1424,9 +1473,18 @@ function _wsPollOne(kind, id) {
         return;
       }
       var st = await res.json();
-      if (st.status === 'generating') return;
+      if (st.status === 'generating') {
+        // Keep the row's stage/percentage live while it builds.
+        var cur = _wsList(kind).find(function(r) { return r.id === id; }) || {};
+        if (cur.stage !== st.stage || cur.pct !== st.pct) {
+          _wsUpdate(kind, id, {stage: st.stage, pct: st.pct});
+          renderWorkspace(kind);
+        }
+        return;
+      }
       clearInterval(_wsPoll[kind + id]); delete _wsPoll[kind + id];
-      _wsUpdate(kind, id, {status: st.status, rfe_count: st.rfe_count});
+      _wsUpdate(kind, id, {status: st.status, rfe_count: st.rfe_count,
+                           stage: st.stage, pct: st.pct, error: st.error});
       if (st.status === 'ready') {
         toast('“' + st.label + '” is ready', 'success');
         if (!_wsOpen[kind]) { _wsOpen[kind] = id; }

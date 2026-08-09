@@ -1,5 +1,6 @@
 import os, io, csv, json, uuid, asyncio, sqlite3, itertools, re, threading
 import datetime as _dt
+import html.parser as _html_parser
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -86,7 +87,8 @@ def init_db():
             kind TEXT, label TEXT, source_filename TEXT,
             run_id TEXT, rfe_count INTEGER,
             status TEXT DEFAULT 'generating', error TEXT,
-            html TEXT, created_at TEXT
+            html TEXT, created_at TEXT,
+            stage TEXT, pct INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS run_meta (
             run_id TEXT PRIMARY KEY,
@@ -125,6 +127,9 @@ def migrate_db():
         "ALTER TABLE rfe_clusters ADD COLUMN score_breakdown TEXT",
         "ALTER TABLE rfe_clusters ADD COLUMN confidence_sentence TEXT",
         "ALTER TABLE context_docs ADD COLUMN doc_date TEXT",
+        # v2.4: live progress for report generation
+        "ALTER TABLE report_datasets ADD COLUMN stage TEXT",
+        "ALTER TABLE report_datasets ADD COLUMN pct INTEGER DEFAULT 0",
         # v2 scoring: per-RFE match results table
         """CREATE TABLE IF NOT EXISTS matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1971,16 +1976,129 @@ def _rows_from_sheet(rows) -> List[dict]:
         out.append({header[i]: cells[i] for i in range(min(len(header), len(cells)))})
     return out
 
+class _TableHTMLParser(_html_parser.HTMLParser):
+    """Extract the first HTML <table> as rows of cell text.
+
+    Salesforce and many other tools "export to Excel" by writing an HTML table
+    with an .xls extension, so this is a mainstream case, not an edge case.
+    """
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows: List[List[str]] = []
+        self._row: Optional[List[str]] = None
+        self._cell: Optional[List[str]] = None
+        self._depth = 0
+        self._done = False
+
+    def handle_starttag(self, tag, attrs):
+        if self._done:
+            return
+        if tag == "table":
+            self._depth += 1
+        elif tag == "tr" and self._depth:
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+        elif tag == "br" and self._cell is not None:
+            self._cell.append("\n")
+
+    def handle_endtag(self, tag):
+        if self._done:
+            return
+        if tag in ("td", "th") and self._cell is not None:
+            self._row.append("".join(self._cell).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+        elif tag == "table" and self._depth:
+            self._depth -= 1
+            if self._depth == 0 and self.rows:
+                self._done = True      # first table only
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _rows_from_xml_spreadsheet(content: bytes) -> List[List[str]]:
+    """Parse the XML Spreadsheet 2003 format (also written as .xls)."""
+    import xml.etree.ElementTree as ET
+    ns = "{urn:schemas-microsoft-com:office:spreadsheet}"
+    root = ET.fromstring(content)
+    out: List[List[str]] = []
+    table = root.find(f".//{ns}Worksheet/{ns}Table")
+    if table is None:
+        return out
+    for row in table.findall(f"{ns}Row"):
+        cells = []
+        for cell in row.findall(f"{ns}Cell"):
+            data = cell.find(f"{ns}Data")
+            cells.append((data.text or "").strip() if data is not None else "")
+        out.append(cells)
+    return out
+
+
+def _decode(content: bytes) -> str:
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")
+
+
+def sniff_upload_format(filename: str, content: bytes) -> str:
+    """Identify the real format from the bytes, not the file extension.
+
+    Files named .xls are frequently HTML, XML or tab-separated text; trusting
+    the extension is what produced 'Expected BOF record' errors on perfectly
+    good exports.
+    """
+    if content[:4] == b"PK\x03\x04":
+        return "xlsx"                                    # zip container
+    if content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "xls"                                     # OLE2 / real BIFF
+    head = content[:4096].lstrip()[:1024].lower()
+    if head.startswith(b"<?xml") and b"workbook" in head:
+        return "xmlss"
+    if b"<html" in head or b"<table" in head or head.startswith(b"<!doctype html"):
+        return "html"
+    return "text"                                        # csv / tsv / delimited
+
+
 def parse_rfe_upload(filename: str, content: bytes) -> Tuple[List[dict], List[str]]:
     """Parse an uploaded RFE file into (rows, headers).
 
-    Accepts .csv, .xlsx/.xlsm and legacy .xls. The Excel readers are imported
-    lazily and report a clear, actionable error if the library is absent, so a
-    missing optional dependency can never stop the app from starting.
+    Accepts real .xlsx/.xlsm and .xls, plus the HTML-table, XML-Spreadsheet and
+    delimited-text files that tools commonly emit with an .xls extension. The
+    Excel readers are imported lazily and report a clear, actionable error if
+    the library is absent, so a missing optional dependency can never stop the
+    app from starting.
     """
-    name = (filename or "").lower()
+    if not content:
+        raise HTTPException(400, "That file is empty.")
+    kind = sniff_upload_format(filename, content)
 
-    if name.endswith((".xlsx", ".xlsm")):
+    if kind == "html":
+        parser = _TableHTMLParser()
+        try:
+            parser.feed(_decode(content))
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that file: {str(e)[:200]}")
+        if not parser.rows:
+            raise HTTPException(400,
+                "That file looks like an HTML export but contains no table.")
+        return _dicts_from_rows(parser.rows)
+
+    if kind == "xmlss":
+        try:
+            rows = _rows_from_xml_spreadsheet(content)
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that XML spreadsheet: {str(e)[:200]}")
+        if not rows:
+            raise HTTPException(400, "That XML spreadsheet contains no rows.")
+        return _dicts_from_rows(rows)
+
+    if kind == "xlsx":
         try:
             import openpyxl
         except ImportError:
@@ -1996,7 +2114,7 @@ def parse_rfe_upload(filename: str, content: bytes) -> Tuple[List[dict], List[st
         except Exception as e:
             raise HTTPException(400, f"Could not read that Excel file: {str(e)[:200]}")
 
-    elif name.endswith(".xls"):
+    elif kind == "xls":
         try:
             import xlrd
         except ImportError:
@@ -2031,34 +2149,68 @@ def parse_rfe_upload(filename: str, content: bytes) -> Tuple[List[dict], List[st
             raise HTTPException(400, f"Could not read that Excel file: {str(e)[:200]}")
 
     else:
+        # Delimited text. Sniff the delimiter — exports named .xls are often
+        # tab-separated, and a comma-only reader turns each line into one cell.
+        text = _decode(content)
+        sample = text[:8192]
         try:
-            text = content.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = content.decode("latin-1")
-        reader = csv.DictReader(io.StringIO(text))
-        rows = list(reader)
-        return rows, list(reader.fieldnames or [])
+            delim = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+        except Exception:
+            first = sample.splitlines()[0] if sample.splitlines() else ""
+            delim = max(",;\t|", key=first.count) if first else ","
+        reader = csv.DictReader(io.StringIO(text), delimiter=delim)
+        rows = [{(k or "").strip(): v for k, v in r.items()} for r in reader]
+        return rows, [(h or "").strip() for h in (reader.fieldnames or [])]
 
     return rows, (list(rows[0].keys()) if rows else [])
 
+
+def _dicts_from_rows(rows: List[List[str]]) -> Tuple[List[dict], List[str]]:
+    """Shared tail for the row-list parsers: first non-empty row is the header."""
+    dicts = _rows_from_sheet(rows)
+    return dicts, (list(dicts[0].keys()) if dicts else [])
+
+def _set_report_progress(report_id: str, stage: str, pct: int) -> None:
+    """Record a generation stage so the UI can show what is actually happening
+    rather than an unexplained spinner."""
+    try:
+        conn = get_db()
+        conn.execute("UPDATE report_datasets SET stage=?, pct=? WHERE report_id=?",
+                     (stage, max(0, min(100, int(pct))), report_id))
+        conn.commit(); conn.close()
+    except Exception:
+        pass
+
 def _generate_report_dataset(report_id: str, kind: str, run_id: str) -> None:
     """Background job: render the report for an uploaded dataset and store it.
-    Runs for as long as it needs — the UI polls for completion."""
+    Runs for as long as it needs — the UI polls stage/pct for progress."""
     try:
+        _set_report_progress(report_id, "Loading your RFEs…", 10)
         if kind == "weekly":
             from scoring.weekly_report_generator import generate_report as _gen
         else:
             from scoring.pi_report_generator import generate_report as _gen
-        html = _gen(DB_PATH, run_id)
+
+        def _progress(stage: str, pct: int) -> None:
+            _set_report_progress(report_id, stage, pct)
+
+        try:
+            html = _gen(DB_PATH, run_id, progress=_progress)
+        except TypeError:
+            # Generator without progress support — still works, just coarser.
+            _set_report_progress(report_id, "Building the report…", 45)
+            html = _gen(DB_PATH, run_id)
+
+        _set_report_progress(report_id, "Saving…", 95)
         conn = get_db()
-        conn.execute("UPDATE report_datasets SET status='ready', html=?, error=NULL "
-                     "WHERE report_id=?", (html, report_id))
+        conn.execute("UPDATE report_datasets SET status='ready', html=?, error=NULL, "
+                     "stage='Ready', pct=100 WHERE report_id=?", (html, report_id))
         conn.commit(); conn.close()
     except Exception as e:
         try:
             conn = get_db()
-            conn.execute("UPDATE report_datasets SET status='error', error=? WHERE report_id=?",
-                         (str(e)[:500], report_id))
+            conn.execute("UPDATE report_datasets SET status='error', error=?, "
+                         "stage='Failed' WHERE report_id=?", (str(e)[:500], report_id))
             conn.commit(); conn.close()
         except Exception:
             pass
@@ -2116,8 +2268,8 @@ async def api_report_upload(kind: str, background: BackgroundTasks,
 async def api_report_status(kind: str, report_id: str):
     _check_kind(kind)
     conn = get_db()
-    row = conn.execute("SELECT report_id,kind,label,rfe_count,status,error,created_at "
-                       "FROM report_datasets WHERE report_id=? AND kind=?",
+    row = conn.execute("SELECT report_id,kind,label,rfe_count,status,error,created_at,"
+                       "stage,pct FROM report_datasets WHERE report_id=? AND kind=?",
                        (report_id, kind)).fetchone()
     conn.close()
     if not row:

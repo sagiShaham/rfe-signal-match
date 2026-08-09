@@ -923,12 +923,22 @@ color:#1a2340;padding:60px;text-align:center">
 <p style="color:#5a6a8a">{_esc(message)}</p></body></html>"""
 
 
-def generate_report(db_path: str, run_id: str | None = None) -> str:
+def generate_report(db_path: str, run_id: str | None = None, progress=None) -> str:
     """Build the self-contained weekly-analysis HTML report.
 
     `run_id` selects an uploaded dataset; omit it for the shared latest run.
+    `progress` is an optional callable(stage_text, pct) used to report what the
+    build is doing, so the UI can show real status instead of a bare spinner.
     """
+    def _tick(stage: str, pct: int) -> None:
+        if progress:
+            try:
+                progress(stage, pct)
+            except Exception:
+                pass          # progress reporting must never break the report
+
     ensure_tables(db_path)
+    _tick("Loading your RFEs…", 15)
     records, meta = load_rfes(db_path, run_id)
     if not records:
         return _empty_page("No RFE data found. Upload a CSV of RFEs on the "
@@ -948,10 +958,13 @@ def generate_report(db_path: str, run_id: str | None = None) -> str:
     for r in records:
         by_section[r["_section"]].append(r)
 
-    clusters_by_section = {
-        sid: build_clusters(sorted(by_section.get(sid, []), key=lambda r: -r["_score"]), sid)
-        for sid in DOMAIN_IDS
-    }
+    _tick(f"Grouping {len(records)} RFEs into themes…", 40)
+    clusters_by_section = {}
+    for i, sid in enumerate(DOMAIN_IDS):
+        clusters_by_section[sid] = build_clusters(
+            sorted(by_section.get(sid, []), key=lambda r: -r["_score"]), sid)
+        _tick(f"Grouping {SECTION_NAME.get(sid, sid)}…",
+              40 + int(30 * (i + 1) / len(DOMAIN_IDS)))
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
     nav = []
@@ -1137,6 +1150,7 @@ def generate_report(db_path: str, run_id: str | None = None) -> str:
         },
     }
 
+    _tick("Rendering charts and pages…", 88)
     return _page_shell(sidebar, "".join(pages), chart_data)
 
 

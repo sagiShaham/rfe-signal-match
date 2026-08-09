@@ -320,11 +320,20 @@ def _render_cases_table(cases: List[Dict]) -> str:
 </tr></thead><tbody>{rows}</tbody></table>"""
 
 
-def generate_report(db_path: str, run_id: str | None = None) -> str:
+def generate_report(db_path: str, run_id: str | None = None, progress=None) -> str:
     """Generate a standalone HTML PI Planning report from the SQLite DB.
 
     `run_id` selects an uploaded dataset; omit it for the shared latest run.
+    `progress` is an optional callable(stage_text, pct) for UI status.
     """
+    def _tick(stage: str, pct: int) -> None:
+        if progress:
+            try:
+                progress(stage, pct)
+            except Exception:
+                pass          # progress reporting must never break the report
+
+    _tick("Loading your RFEs…", 15)
     records = load_data(db_path, run_id)
 
     if not records:
@@ -335,7 +344,9 @@ def generate_report(db_path: str, run_id: str | None = None) -> str:
 </body></html>"""
 
     # Classify domains and build clusters
+    _tick(f"Clustering {len(records)} RFEs by domain…", 45)
     domain_clusters = build_domain_data(records)
+    _tick("Rendering charts and pages…", 85)
 
     # Assign cluster name back to each record so ALL_RECORDS.cluster is correct
     for domain, clusters in domain_clusters.items():
