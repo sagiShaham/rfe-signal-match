@@ -1780,108 +1780,21 @@ async def api_log_email(req: LogEmailRequest):
     conn.commit(); conn.close()
     return {"logged": True}
 
-@app.post("/api/send-email-smtp")
-async def api_send_email_smtp(req: LogEmailRequest):
-    """
-    Send an email via SMTP (Office 365) — no Azure/Entra app registration required.
-    Set in .env:
-      SMTP_HOST=smtp.office365.com   (default)
-      SMTP_PORT=587                  (default, STARTTLS)
-      SMTP_USER=you@cynet.com        (the sending mailbox)
-      SMTP_PASS=<mailbox password or app password>
-      SMTP_FROM=you@cynet.com        (optional; defaults to SMTP_USER)
-    """
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.utils import formataddr
+# The /api/send-email-smtp and /api/send-email-graph endpoints were REMOVED.
+# Both delivered mail directly — no review, no approval, no recipient checks —
+# which bypassed the RFE Mail Broker entirely. Because the app has no
+# authentication, anyone able to reach it could have called them, and adding
+# SMTP_* or GRAPH_* credentials to .env would have silently armed them.
+# All sending now goes through the broker below, where a human reviewer on the
+# broker's Entra allowlist must approve a batch before anything is delivered.
+# Do not reintroduce a direct-send path here.
 
-    host = os.getenv("SMTP_HOST", "smtp.office365.com").strip()
-    port = int(os.getenv("SMTP_PORT", "587").strip() or "587")
-    user = os.getenv("SMTP_USER", "").strip()
-    pw   = os.getenv("SMTP_PASS", "").strip()
-    sender = os.getenv("SMTP_FROM", user).strip() or user
-    if not user or not pw:
-        raise HTTPException(501,
-            "SMTP is not configured. Add SMTP_USER and SMTP_PASS to .env "
-            "(SMTP_HOST defaults to smtp.office365.com, SMTP_PORT to 587).")
-
-    to_addrs = [a.strip() for a in req.to.split(";") if a.strip()]
-    cc_addrs = [a.strip() for a in (req.cc or "").split(";") if a.strip()]
-    if not to_addrs:
-        raise HTTPException(400, "No recipient address provided.")
-
-    msg = MIMEText(req.body, "plain", "utf-8")
-    msg["Subject"] = req.subject
-    msg["From"] = formataddr(("Cynet Product", sender))
-    msg["To"] = ", ".join(to_addrs)
-    if cc_addrs:
-        msg["Cc"] = ", ".join(cc_addrs)
-
-    def _smtp_send():
-        with smtplib.SMTP(host, port, timeout=20) as s:
-            s.ehlo(); s.starttls(); s.ehlo()
-            s.login(user, pw)
-            s.sendmail(sender, to_addrs + cc_addrs, msg.as_string())
-
-    loop = asyncio.get_event_loop()
-    try:
-        await loop.run_in_executor(executor, _smtp_send)
-    except smtplib.SMTPAuthenticationError as e:
-        raise HTTPException(502,
-            "SMTP login rejected. Your org likely has SMTP AUTH disabled (common with SSO), "
-            "or the account needs an app password. Ask IT to enable SMTP AUTH for the sending "
-            f"mailbox. ({str(e)[:120]})")
-    except Exception as e:
-        raise HTTPException(502, f"SMTP send failed: {str(e)[:200]}")
-
-    await api_log_email(LogEmailRequest(**{**req.dict(), "via": "smtp"}))
-    return {"sent": True, "via": "smtp"}
-
-@app.post("/api/send-email-graph")
-async def api_send_email_graph(req: LogEmailRequest):
-    """
-    Send an email via Microsoft Graph API (future).
-    Requires an Azure AD app registration with Mail.Send permission:
-    set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET, GRAPH_SENDER_UPN in .env.
-    """
-    tenant = os.getenv("GRAPH_TENANT_ID", "").strip()
-    client_id = os.getenv("GRAPH_CLIENT_ID", "").strip()
-    secret = os.getenv("GRAPH_CLIENT_SECRET", "").strip()
-    sender = os.getenv("GRAPH_SENDER_UPN", "").strip()
-    if not all([tenant, client_id, secret, sender]):
-        raise HTTPException(501,
-            "Microsoft Graph is not configured. Ask IT for an Azure AD app registration "
-            "with Mail.Send permission, then set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, "
-            "GRAPH_CLIENT_SECRET and GRAPH_SENDER_UPN in .env.")
-    import httpx
-    async with httpx.AsyncClient() as http:
-        tok = await http.post(
-            f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
-            data={"grant_type": "client_credentials", "client_id": client_id,
-                  "client_secret": secret, "scope": "https://graph.microsoft.com/.default"})
-        if tok.status_code != 200:
-            raise HTTPException(502, f"Graph auth failed: {tok.text[:200]}")
-        access_token = tok.json()["access_token"]
-        to_list = [{"emailAddress": {"address": a.strip()}} for a in req.to.split(";") if a.strip()]
-        cc_list = [{"emailAddress": {"address": a.strip()}} for a in (req.cc or "").split(";") if a.strip()]
-        msg = {"message": {"subject": req.subject,
-                           "body": {"contentType": "Text", "content": req.body},
-                           "toRecipients": to_list, "ccRecipients": cc_list},
-               "saveToSentItems": True}
-        resp = await http.post(
-            f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
-            headers={"Authorization": f"Bearer {access_token}"}, json=msg)
-        if resp.status_code not in (200, 202):
-            raise HTTPException(502, f"Graph send failed: {resp.text[:200]}")
-    await api_log_email(LogEmailRequest(**{**req.dict(), "via": "graph"}))
-    return {"sent": True}
-
-# ─── RFE Mail Broker — internal TEST email only ───────────────────────────────
-# Submits controlled internal test batches to the production RFE Mail Broker and
-# reports their status. This is TEST-ONLY: recipients are restricted to the
-# allowed @cynet.com domain, subjects are forced to a [TEST] prefix, and the
-# batch size is capped. There is deliberately no real-customer/bulk send path
-# here — that workflow is owned separately by Sagi in the broker review portal.
+# ─── RFE Mail Broker — email send ─────────────────────────────────────────────
+# Submits batches to the production RFE Mail Broker and reports their status.
+# Recipients may be on ANY domain, including real customers. Submitting only
+# *stages* a batch as PendingReview — the broker's Entra-gated review portal
+# still has to approve it before anything is delivered, so this endpoint cannot
+# cause an email to be sent on its own.
 # The broker Function keys live only in server env and are never sent to the
 # browser. The reviewUrl is a temporary credential and is never logged.
 
@@ -1912,7 +1825,7 @@ async def api_test_email_submit(req: TestEmailSubmitRequest):
     try:
         payload = broker_client.build_test_batch(
             recipient=req.recipient, subject=req.subject, body=req.body,
-            domain=cfg.allowed_domain, rfe_id=req.rfe_id,
+            rfe_id=req.rfe_id,
             customer_id=req.customer_id, customer_name=req.customer_name)
         result = await broker_client.submit_batch(payload)
     except broker_client.BrokerError as e:
@@ -1926,8 +1839,8 @@ async def api_test_email_submit(req: TestEmailSubmitRequest):
             "INSERT INTO email_log (run_id,cluster_id,case_number,account_name,"
             "recipient_email,subject,body,status,sent_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (None, req.cluster_id, req.rfe_id, req.customer_name,
-             msg["recipient"], msg["subject"], "[internal test batch submitted to broker]",
-             f"test_{result.get('status', 'submitted')}", datetime.utcnow().isoformat()))
+             msg["recipient"], msg["subject"], "[batch submitted to broker for review]",
+             f"broker_{result.get('status', 'submitted')}", datetime.utcnow().isoformat()))
         conn.commit(); conn.close()
     except Exception:
         pass

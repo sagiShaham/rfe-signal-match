@@ -275,10 +275,15 @@ A portfolio-level strategic demand report generated natively from the RFE data i
 ### ✉️ Outlook / email integration
 The email drawer (Signal Match → expand cluster → Generate Email) now supports sending, not just copying.
 - **Editable To** (customer contact) + **CC** (CSM / stakeholders) + editable Subject/Body
-- **📤 Send Email** — sends directly via Office 365 SMTP (`POST /api/send-email-smtp`). No Azure/Entra app registration needed; requires `SMTP_USER` / `SMTP_PASS` in `.env` and SMTP AUTH enabled on the mailbox.
-- **✉️ Outlook draft** — opens a pre-filled draft in the user's own Outlook via `mailto:` (zero setup, always works)
-- **Microsoft Graph path** — `POST /api/send-email-graph` for fully-automated service-mailbox sending. Requires an Azure AD app registration with `Mail.Send`; set `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` / `GRAPH_SENDER_UPN`.
-- Every send/draft is logged to the `email_log` table for audit (`sent_smtp` / `sent_graph` / `drafted_outlook`)
+- **📤 Send via Mail Broker** — the only send path. Stages the email in the RFE Mail Broker for review; a reviewer approves before it is delivered. See [RFE Mail Broker](#rfe-mail-broker--sending-email).
+- **✉️ Outlook draft** — opens a pre-filled draft in the user's own Outlook via `mailto:` (zero setup, always works). Sends nothing itself — you press send in Outlook.
+- **📋 Copy** — copies the drafted text to the clipboard.
+- Every send/draft is logged to the `email_log` table for audit.
+
+> **Removed in v2.3:** the old **📤 Send Email** button and the `POST /api/send-email-smtp`
+> and `POST /api/send-email-graph` endpoints. Both delivered mail with no review and no
+> approval, and the app has no authentication, so anyone able to reach it could have called
+> them. Do not reintroduce a direct-send path.
 
 ### ☁️ Live Salesforce pull
 The "Salesforce API" card on Data Sources now pulls RFE cases live via SOQL (`POST /api/pull`) — no manual CSV export.
@@ -290,11 +295,10 @@ The "Salesforce API" card on Data Sources now pulls RFE cases live via SOQL (`PO
 
 | Variable | Purpose | Required for |
 |---|---|---|
-| `SMTP_USER`, `SMTP_PASS` | Office 365 mailbox for sending | 📤 Send Email |
-| `SMTP_HOST`, `SMTP_PORT` | Defaults `smtp.office365.com` / `587` | (optional) |
-| `SMTP_FROM` | From address (defaults to `SMTP_USER`) | (optional) |
-| `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `GRAPH_SENDER_UPN` | Azure AD app for Graph send | Graph send (optional) |
 | `SF_USERNAME`, `SF_PASSWORD`, `SF_SECURITY_TOKEN`, `SF_DOMAIN` | Salesforce API pull | ☁️ SF pull |
+
+The `SMTP_*` and `GRAPH_*` variables are gone — they configured the direct-send endpoints
+removed in v2.3. Sending is configured via `RFE_BROKER_*` instead.
 
 ---
 
@@ -381,21 +385,22 @@ usable description.
 | `POST /api/weekly-report/summaries` | Background LLM job to generate missing PM summaries |
 | `POST /api/weekly-report/decision` | Persist (or clear) an RFE's assigned state |
 
-## RFE Mail Broker — internal test email
+## RFE Mail Broker — sending email
 
-RFE Signal Match can submit **internal test emails** to the production **RFE Mail Broker**
+RFE Signal Match can submit emails to the production **RFE Mail Broker**
 (Azure Function `func-rfe-notif-prd-1791a`), open the broker's browser review portal, and
 monitor batch status.
 
-> **Scope: TEST ONLY.** This integration only ever sends controlled internal test messages —
-> recipients restricted to `@cynet.com`, subjects forced to a `[TEST]` prefix, batch size
-> capped at 5. **Production customer sending is not implemented here** and remains the
-> responsibility of Sagi, via the broker's own Entra-authenticated review portal.
+> **Recipients may be on any domain, including real customers.** There is no client-side
+> domain allowlist. The guardrail is the broker's review step: submitting only *stages* a
+> batch as `PendingReview`. Nothing is delivered until someone on the broker's Entra
+> allowlist (`RFE_REVIEWER_EMAILS`) approves it in the review portal. The platform cannot
+> send an email on its own.
 
 ### Architecture
 
 ```
-Browser (test drawer)  ──►  POST /api/test-email/submit        (local backend only)
+Browser (send drawer)  ──►  POST /api/test-email/submit        (local backend only)
                        ──►  GET  /api/test-email/status/{id}
                        ──►  GET  /api/test-email/config          (safe booleans, no secrets)
    main.py  ──►  broker_client.py  ──►  https://func-rfe-notif-prd-1791a.azurewebsites.net/api
@@ -421,10 +426,9 @@ Add to `.env` (see [`.env.example`](.env.example)). Never commit real values.
 | `RFE_BROKER_BASE_URL` | Broker API base, e.g. `https://func-rfe-notif-prd-1791a.azurewebsites.net/api` |
 | `RFE_BROKER_SUBMIT_KEY` | `submit_batch` Function key (server only) |
 | `RFE_BROKER_STATUS_KEY` | `get_batch_status` Function key (server only) |
-| `RFE_BROKER_TEST_MODE` | Must be `true` to allow submits (default `true`) |
-| `RFE_BROKER_ALLOWED_TEST_DOMAIN` | Allowed recipient domain (default `cynet.com`) |
+| `RFE_BROKER_TEST_MODE` | Master on/off switch — must be `true` to allow submits (default `true`) |
 
-If any required value is missing, the test-send action is **disabled** in the UI with an
+If any required value is missing, the send action is **disabled** in the UI with an
 administrator-facing message; the rest of the app starts and runs normally.
 
 ### Local development
@@ -435,22 +439,27 @@ source venv/bin/activate
 uvicorn main:app --port 8000
 ```
 
-Open the app → **Signal Match** → expand a cluster → **✉ Generate Email** → **🧪 Send internal test**.
+Open the app → **Signal Match** → expand a cluster → **✉ Generate Email** → **📤 Send via Mail Broker**.
 
-### Test-only safety controls
+### Safety controls
 
-- Recipient must match `^[^@\s]+@cynet.com$` exactly — subdomains (`x@a.cynet.com`) and suffix
-  tricks (`x@cynet.com.attacker.tld`) are rejected server-side.
-- Subject is normalized to begin with `[TEST]`.
-- Body must be non-empty; it is HTML-escaped server-side before being wrapped as `bodyHtml`.
+- **The review step is the control.** A submitted batch is `PendingReview` and inert. Approval
+  happens only in the broker's Entra-gated portal, by a reviewer on `RFE_REVIEWER_EMAILS`.
+- Recipient must be a syntactically valid address (matching the broker's own rule). Any
+  domain is accepted; malformed input such as `a@b.com@evil.com` is rejected server-side.
+- Subject is used **verbatim** — no prefix is injected, since a real customer must never
+  receive a marker they didn't write. Subject and body must be non-empty.
+- Body is HTML-escaped server-side before being wrapped as `bodyHtml`.
 - Batch size is capped at 5 messages.
 - Submits are refused unless `RFE_BROKER_TEST_MODE=true`.
 - The sender mailbox (`product-notifications@cynet.com`) is fixed by the broker and is not
   user-editable or present in the payload.
+- The broker re-verifies a content hash before queueing, so an approved body cannot be
+  swapped after the fact.
 
 ### CC / Reply-To limitation
 
-The RFE Mail Broker does **not** support CC or Reply-To. The test drawer shows a disabled CC
+The RFE Mail Broker does **not** support CC or Reply-To. The send drawer shows a disabled CC
 field with the message *"CC is not yet supported by the RFE Mail Broker and will not be
 submitted."* No workaround (e.g. injecting CC into the body or making extra mail calls) is
 implemented.

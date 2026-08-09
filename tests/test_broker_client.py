@@ -1,58 +1,57 @@
-"""Tests for the RFE Mail Broker client (TEST-EMAIL ONLY).
+"""Tests for the RFE Mail Broker client.
 
 These cover the pure logic — validation, subject/body normalization, payload
 building, response mapping, and secret redaction — with no network access.
+
+Recipients may be on any domain: the guardrail is the broker's review-and-
+approve step, not a client-side domain allowlist.
 """
 import pytest
 
 import broker_client as bc
 
 
-# ── Recipient domain validation ───────────────────────────────────────────────
-def test_accepts_valid_cynet_recipient():
-    assert bc.valid_recipient("employee@cynet.com", "cynet.com") is True
-    assert bc.validate_recipient("Employee@Cynet.com", "cynet.com") == "employee@cynet.com"
+# ── Recipient validation — any domain, but must be a real address ─────────────
+def test_accepts_any_domain():
+    for addr in ("employee@cynet.com", "buyer@customer.com",
+                 "a.b@sub.example.co.il", "x+tag@mail.example.org"):
+        assert bc.valid_recipient(addr) is True
 
 
-def test_rejects_external_domain():
-    assert bc.valid_recipient("user@gmail.com", "cynet.com") is False
-    with pytest.raises(bc.BrokerError):
-        bc.validate_recipient("user@gmail.com", "cynet.com")
+def test_normalizes_case_and_whitespace():
+    assert bc.validate_recipient("  Buyer@Customer.COM  ") == "buyer@customer.com"
 
 
-def test_rejects_suffix_trick():
-    # classic "looks like cynet.com but isn't" attack
-    assert bc.valid_recipient("user@cynet.com.attacker.tld", "cynet.com") is False
-    with pytest.raises(bc.BrokerError):
-        bc.validate_recipient("user@cynet.com.attacker.tld", "cynet.com")
-
-
-def test_rejects_subdomain():
-    assert bc.valid_recipient("user@sub.cynet.com", "cynet.com") is False
-
-
-def test_rejects_double_at_and_prefix_trick():
-    assert bc.valid_recipient("user@cynet.com@evil.com", "cynet.com") is False
-    assert bc.valid_recipient("user@evilcynet.com", "cynet.com") is False
+def test_rejects_malformed_addresses():
+    for addr in ("nope", "no@domain", "a b@c.com", "<x@y.com>",
+                 "user@cynet.com@evil.com", "@nolocal.com", "trailing@"):
+        assert bc.valid_recipient(addr) is False
+        with pytest.raises(bc.BrokerError):
+            bc.validate_recipient(addr)
 
 
 def test_rejects_missing_recipient():
     with pytest.raises(bc.BrokerError):
-        bc.validate_recipient("", "cynet.com")
+        bc.validate_recipient("")
 
 
-# ── Subject normalization ─────────────────────────────────────────────────────
-def test_subject_prefix_is_added_when_missing():
-    assert bc.ensure_test_subject("Your RFE update") == "[TEST] Your RFE update"
+# ── Subject — used verbatim, no forced prefix ────────────────────────────────
+def test_subject_is_used_verbatim():
+    assert bc.ensure_subject("  Your RFE update  ") == "Your RFE update"
 
 
-def test_subject_prefix_is_preserved_when_present():
-    assert bc.ensure_test_subject("[TEST] Already prefixed") == "[TEST] Already prefixed"
+def test_no_test_prefix_is_injected():
+    # a real customer must never receive a "[TEST]" marker they didn't write
+    assert not bc.ensure_subject("Your RFE update").startswith("[TEST]")
+
+
+def test_caller_supplied_prefix_is_left_alone():
+    assert bc.ensure_subject("[TEST] Already prefixed") == "[TEST] Already prefixed"
 
 
 def test_empty_subject_rejected():
     with pytest.raises(bc.BrokerError):
-        bc.ensure_test_subject("   ")
+        bc.ensure_subject("   ")
 
 
 # ── Body validation ───────────────────────────────────────────────────────────
@@ -80,39 +79,38 @@ def test_batch_size_enforced():
 # ── Payload building ──────────────────────────────────────────────────────────
 def test_build_test_batch_shape_and_no_sender():
     payload = bc.build_test_batch(
-        recipient="Tester@cynet.com",
+        recipient="Buyer@Customer.com",
         subject="Ping",
         body="Body text",
-        domain="cynet.com",
         rfe_id="RFE-12345",
         customer_name="Acme Corp",
     )
-    assert payload["batchId"].startswith("RFE-TEST-")
+    assert payload["batchId"].startswith("RFE-MAIL-")
     assert len(payload["messages"]) == 1
     msg = payload["messages"][0]
-    assert msg["recipient"] == "tester@cynet.com"        # lowercased
-    assert msg["subject"] == "[TEST] Ping"               # prefixed
+    assert msg["recipient"] == "buyer@customer.com"      # lowercased, external
+    assert msg["subject"] == "Ping"                      # verbatim, no prefix
     assert msg["rfeId"] == "RFE-12345"
     assert "bodyHtml" in msg and "bodyText" not in msg    # exactly one body form
     # sender mailbox is fixed by the broker and must never be in the payload
     assert "sender" not in msg and "from" not in msg
+    # CC / Reply-To are unsupported by the broker — never smuggled in
+    assert "cc" not in {k.lower() for k in msg} and "replyTo" not in msg
     # itemId respects the broker's allowed charset
     import re
     assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", msg["itemId"])
 
 
 def test_build_test_batch_defaults_customer_fields():
-    payload = bc.build_test_batch(
-        recipient="t@cynet.com", subject="x", body="y", domain="cynet.com")
+    payload = bc.build_test_batch(recipient="t@example.com", subject="x", body="y")
     msg = payload["messages"][0]
-    assert msg["customerId"] == "CYNET-INTERNAL"
-    assert msg["customerName"] == "Cynet Internal"
+    assert msg["customerId"] == "UNKNOWN"
+    assert msg["customerName"] == "Unknown"
 
 
-def test_build_test_batch_rejects_external_recipient():
+def test_build_test_batch_rejects_malformed_recipient():
     with pytest.raises(bc.BrokerError):
-        bc.build_test_batch(
-            recipient="x@outside.com", subject="x", body="y", domain="cynet.com")
+        bc.build_test_batch(recipient="not-an-address", subject="x", body="y")
 
 
 # ── Submit response mapping ───────────────────────────────────────────────────
@@ -176,7 +174,7 @@ def test_sanitize_status_failed_with_error_code():
 def _cfg():
     return bc.BrokerConfig(
         base_url="https://broker/api", submit_key="SUBMIT-SECRET-123",
-        status_key="STATUS-SECRET-456", test_mode=True, allowed_domain="cynet.com")
+        status_key="STATUS-SECRET-456", test_mode=True)
 
 
 def test_redact_strips_keys():

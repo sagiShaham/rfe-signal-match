@@ -495,45 +495,10 @@ function copyEmailToClipboard() {
     .catch(function() { _toast('Copy failed — try manual select', 'error'); });
 }
 
-async function sendEmailFromDrawer() {
-  var f = _readEmailFields();
-  if (!f.to || !_isEmailAddr(f.to.split(';')[0])) {
-    _toast('Enter a valid recipient email in the To field', 'error');
-    document.getElementById('email-to')?.focus();
-    return;
-  }
-  var btn = document.getElementById('btn-send-email');
-  var orig = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Sending…';
-  try {
-    var cluster = _getClusters().find(function(c){ return c.id === drawerClusterId; });
-    var member = cluster && cluster.members && cluster.members[0];
-    var payload = {
-      cluster_id: drawerClusterId,
-      case_number: member ? member.case_number : null,
-      account_name: member ? member.account_name : null,
-      to: f.to, cc: f.cc || null, subject: f.subject, body: f.body
-    };
-    var res = await fetch('/api/send-email-smtp', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    });
-    if (res.status === 501) {
-      _toast('Direct send not configured yet — add SMTP_USER / SMTP_PASS to .env, or use "Outlook draft".', 'error');
-      return;
-    }
-    if (!res.ok) {
-      var err = await res.json().catch(function(){ return {detail: res.statusText}; });
-      throw new Error(err.detail || 'Send failed');
-    }
-    _toast('Email sent ✅', 'success');
-    closeEmailDrawer();
-  } catch(e) {
-    _toast('Send failed: ' + e.message, 'error');
-  } finally {
-    btn.disabled = false; btn.textContent = orig;
-  }
-}
+// sendEmailFromDrawer() was removed along with the "Send Email" button. It
+// posted straight to /api/send-email-smtp, which delivers with no review and no
+// approval — bypassing the RFE Mail Broker entirely. All sending now goes
+// through openTestDrawer() -> the broker -> a reviewer's approval.
 
 function openInOutlook() {
   var f = _readEmailFields();
@@ -1153,24 +1118,25 @@ function navigate(page) { _nav(page); }
     <div style="color:var(--text-muted);text-align:center;padding:40px">Generating email…</div>
   </div>
   <div class="drawer-footer" style="flex-wrap:wrap;gap:8px">
-    <button class="btn btn-primary" style="flex:1 1 100%" id="btn-send-email" onclick="sendEmailFromDrawer()">📤 Send Email</button>
+    <!-- The broker is the only send path. The old direct-SMTP "Send Email"
+         button was removed: it bypassed the review-and-approve step entirely. -->
+    <button class="btn btn-primary" style="flex:1 1 100%" title="Stage this email in the RFE Mail Broker for review and approval" onclick="openTestDrawer()">📤 Send via Mail Broker</button>
     <button class="btn btn-ghost btn-sm" style="flex:1" onclick="copyEmailToClipboard()">📋 Copy</button>
     <button class="btn btn-ghost btn-sm" style="flex:1" onclick="openInOutlook()">✉️ Outlook draft</button>
     <button class="btn btn-success btn-sm" style="flex:1" id="drawer-approve-btn" onclick="approveFromDrawer()">✅ Approve</button>
-    <button class="btn btn-ghost btn-sm" style="flex:1 1 100%" title="Send a controlled internal test to a @cynet.com mailbox via the RFE Mail Broker" onclick="openTestDrawer()">🧪 Send internal test</button>
   </div>
 </div>
 
-<!-- Internal test-email drawer — submits to the RFE Mail Broker (TEST only, @cynet.com) -->
+<!-- Mail Broker drawer — stages a batch for review; the broker approves and sends -->
 <div id="test-email-drawer">
   <div class="drawer-header">
-    <span style="font-size:18px">🧪</span>
-    <span class="drawer-title">Send Internal Test</span>
+    <span style="font-size:18px">📤</span>
+    <span class="drawer-title">Send via Mail Broker</span>
     <button class="btn btn-ghost btn-sm" onclick="closeTestDrawer()">✕ Close</button>
   </div>
   <div class="drawer-body" id="test-drawer-body"></div>
   <div class="drawer-footer">
-    <button class="btn btn-primary" style="flex:1" id="btn-submit-test" onclick="submitTestEmail()">🧪 Submit test</button>
+    <button class="btn btn-primary" style="flex:1" id="btn-submit-test" onclick="submitTestEmail()">📤 Submit for review</button>
   </div>
 </div>
 
@@ -2644,7 +2610,8 @@ var _testCtx = null;            // { cluster_id, rfe_id, customer_name, subject,
 var _testReviewUrl = null;      // temporary credential — kept in memory only, never logged
 var _TEST_FINAL = ['Completed', 'PartiallyFailed', 'Failed', 'DryRunCompleted', 'Rejected'];
 
-function _isCynetEmail(s) { return /^[^@\s]+@cynet\.com$/i.test((s || '').trim()); }
+// Any domain — mirrors the broker's own recipient rule (syntax only).
+function _isValidEmail(s) { return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test((s || '').trim()); }
 
 function _plainToHtml(t) {
   var e = esc(t || '');
@@ -2660,14 +2627,20 @@ function openTestDrawer() {
   var selEl = document.getElementById('email-rfe-sel');
   var selId = selEl ? parseInt(selEl.value) : null;
   var member = (selId ? members.find(function(m){ return m.id === selId; }) : null) || members[0] || {};
+  var toEl = document.getElementById('email-to');
   var subjEl = document.getElementById('email-subject');
   var bodyEl = document.getElementById('email-body');
+  // The draft's To field renders as an <input> in one drawer and a <div> in the
+  // other, so read both. '—' is the placeholder shown when there is no address.
+  var curTo = toEl ? (toEl.value || toEl.textContent || '').trim() : '';
+  if (curTo === '—') curTo = '';
   var curSubject = subjEl ? (subjEl.value || subjEl.textContent || '') : '';
   var curBody = bodyEl ? (bodyEl.value || bodyEl.textContent || '') : '';
   _testCtx = {
     cluster_id: drawerClusterId,
     rfe_id: member.case_number || null,
     customer_name: member.account_name || (cluster && cluster.cluster_title) || 'Cynet Internal',
+    recipient: curTo,
     subject: curSubject,
     body: curBody
   };
@@ -2694,9 +2667,9 @@ async function _renderTestForm() {
   // Configuration missing → disable the action with an admin-facing message.
   if (!cfg.configured || cfg.test_mode === false) {
     submitBtn.disabled = true;
-    body.innerHTML = '<div class="test-warn">⚙️ <strong>Internal test sending is unavailable.</strong><br>' +
+    body.innerHTML = '<div class="test-warn">⚙️ <strong>Broker sending is unavailable.</strong><br>' +
       (cfg.test_mode === false
-        ? 'Test mode is disabled on the server (RFE_BROKER_TEST_MODE).'
+        ? 'Broker sending is disabled on the server (RFE_BROKER_TEST_MODE).'
         : 'The RFE Mail Broker is not configured. An administrator must set ' +
           'RFE_BROKER_BASE_URL, RFE_BROKER_SUBMIT_KEY and RFE_BROKER_STATUS_KEY on the server.') +
       '</div>';
@@ -2704,19 +2677,23 @@ async function _renderTestForm() {
   }
   submitBtn.disabled = false;
 
-  var domain = cfg.allowed_domain || 'cynet.com';
-  var lastRecip = '';
-  try { lastRecip = localStorage.getItem('rfe_test_recipient') || ''; } catch (e) {}
+  // Carry the draft's own recipient across. Only fall back to the last address
+  // used if the draft has none, so a stale value can never silently replace the
+  // customer contact you are looking at.
+  var defRecip = _testCtx.recipient || '';
+  if (!defRecip) {
+    try { defRecip = localStorage.getItem('rfe_test_recipient') || ''; } catch (e) {}
+  }
   var defSubject = _testCtx.subject || '';
-  if (!/^\[TEST\]/.test(defSubject)) defSubject = '[TEST] ' + defSubject;
 
   body.innerHTML =
-    '<div class="test-warn">🧪 <strong>Internal test only.</strong> This sends one message to a <strong>@' +
-      esc(domain) + '</strong> mailbox through the RFE Mail Broker review portal. It is <strong>not</strong> ' +
-      'sent to a customer. Production customer sending is not available here.</div>' +
-    '<div class="email-field"><label>Test recipient (@' + esc(domain) + ')</label>' +
-      '<input class="email-input" id="test-recipient" placeholder="you@' + esc(domain) + '" value="' + esc(lastRecip) + '"></div>' +
-    '<div class="email-field"><label>Subject (must start with [TEST])</label>' +
+    '<div class="test-warn">📤 <strong>This stages the email — it is not sent yet.</strong> ' +
+      'Any recipient domain is allowed, including real customers. The message goes to the ' +
+      'RFE Mail Broker as <strong>PendingReview</strong>, and is only delivered once an ' +
+      'authorized reviewer approves it in the broker review portal.</div>' +
+    '<div class="email-field"><label>Recipient</label>' +
+      '<input class="email-input" id="test-recipient" placeholder="name@company.com" value="' + esc(defRecip) + '"></div>' +
+    '<div class="email-field"><label>Subject</label>' +
       '<input class="email-input" id="test-subject" value="' + esc(defSubject) + '"></div>' +
     '<div class="email-field"><label>CC</label>' +
       '<div class="test-cc-disabled">CC is not yet supported by the RFE Mail Broker and will not be submitted.</div></div>' +
@@ -2733,11 +2710,11 @@ async function submitTestEmail() {
   if (!recipEl || !subjEl) return;
   var recip = (recipEl.value || '').trim();
   var subject = (subjEl.value || '').trim();
-  if (!_isCynetEmail(recip)) {
-    _toast('Recipient must be a valid @cynet.com address', 'error');
+  if (!_isValidEmail(recip)) {
+    _toast('Enter a valid email address', 'error');
     recipEl.focus(); return;
   }
-  if (!/^\[TEST\]/.test(subject)) subject = '[TEST] ' + subject;
+  if (!subject) { _toast('A subject is required', 'error'); subjEl.focus(); return; }
   if (!(_testCtx.body || '').trim()) { _toast('The message body is empty', 'error'); return; }
 
   _testInFlight = true;
@@ -2757,10 +2734,10 @@ async function submitTestEmail() {
     var data = await res.json().catch(function(){ return {}; });
     if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
     _renderTestResult(data);
-    _toast('Test batch submitted — open the review portal to approve', 'success');
+    _toast('Staged — open the review portal to approve', 'success');
     _startTestPolling(data.batchId);
   } catch (e) {
-    _toast('Test submit failed: ' + e.message, 'error');
+    _toast('Submit failed: ' + e.message, 'error');
   } finally {
     _testInFlight = false; btn.disabled = false; btn.textContent = orig;
   }
@@ -2821,11 +2798,11 @@ function _renderTestStatus(data) {
     : (st === 'Failed' || st === 'PartiallyFailed') ? 'var(--high)'
     : 'var(--accent)';
   var guide = ({
-    PendingReview:   'Open the review portal and approve or reject this test batch.',
-    Queuing:         'The approved test message is being processed.',
-    Queued:          'The approved test message is being processed.',
-    Sending:         'The approved test message is being processed.',
-    Completed:       'Test message sent from product-notifications@cynet.com.',
+    PendingReview:   'Nothing sent yet. Open the review portal to approve or reject this batch.',
+    Queuing:         'Approved — the message is being processed.',
+    Queued:          'Approved — the message is being processed.',
+    Sending:         'Approved — the message is being processed.',
+    Completed:       'Sent from product-notifications@cynet.com.',
     Rejected:        'Batch rejected — no email was sent.',
     Failed:          'Sending failed. See the details below.',
     PartiallyFailed: 'Some messages failed. See the details below.',
