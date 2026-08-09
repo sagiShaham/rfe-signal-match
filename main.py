@@ -1,8 +1,9 @@
 import os, io, csv, json, uuid, asyncio, sqlite3, itertools, re, threading
 import datetime as _dt
+import html.parser as _html_parser
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from collections import defaultdict
@@ -77,6 +78,18 @@ def init_db():
             account_name TEXT, recipient_email TEXT, subject TEXT,
             body TEXT, status TEXT, sent_at TEXT
         );
+        -- A report built from a PM's own uploaded CSV, independent of the
+        -- shared Signal Match dump. Its rows live in rfe_pulls under run_id,
+        -- but deliberately have NO run_meta row, so they can never become
+        -- "the latest run" and hijack Signal Match.
+        CREATE TABLE IF NOT EXISTS report_datasets (
+            report_id TEXT PRIMARY KEY,
+            kind TEXT, label TEXT, source_filename TEXT,
+            run_id TEXT, rfe_count INTEGER,
+            status TEXT DEFAULT 'generating', error TEXT,
+            html TEXT, created_at TEXT,
+            stage TEXT, pct INTEGER DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS run_meta (
             run_id TEXT PRIMARY KEY,
             started_at TEXT, completed_at TEXT,
@@ -114,6 +127,9 @@ def migrate_db():
         "ALTER TABLE rfe_clusters ADD COLUMN score_breakdown TEXT",
         "ALTER TABLE rfe_clusters ADD COLUMN confidence_sentence TEXT",
         "ALTER TABLE context_docs ADD COLUMN doc_date TEXT",
+        # v2.4: live progress for report generation
+        "ALTER TABLE report_datasets ADD COLUMN stage TEXT",
+        "ALTER TABLE report_datasets ADD COLUMN pct INTEGER DEFAULT 0",
         # v2 scoring: per-RFE match results table
         """CREATE TABLE IF NOT EXISTS matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1912,6 +1928,380 @@ async def pi_report():
     from scoring.pi_report_generator import generate_report
     html = generate_report(DB_PATH)
     return HTMLResponse(content=html)
+
+# ─── Per-PM report workspaces (Weekly Analysis / PI Report) ───────────────────
+# A PM uploads their own CSV of RFEs and gets a report generated from exactly
+# that set. The rows are stored under their own run_id with NO run_meta entry,
+# so an upload here never becomes "the latest run" and never changes what
+# Signal Match shows for everyone else.
+#
+# Ownership is per-browser: the server hands back a report_id and the browser
+# keeps its own list in localStorage. There is no login, so a report_id is not
+# a secret — it is a handle, consistent with the rest of the platform.
+
+REPORT_KINDS = {"weekly", "pi"}
+
+def _check_kind(kind: str) -> str:
+    if kind not in REPORT_KINDS:
+        raise HTTPException(404, f"Unknown report kind '{kind}'.")
+    return kind
+
+def _cell_to_text(value) -> str:
+    """Render a spreadsheet cell as the string the CSV path would have given.
+    Excel stores numbers and dates as typed values, so 120000 must not become
+    '120000.0' and a date must not become 'datetime.datetime(...)'."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return value.strftime("%Y-%m-%d")
+    return str(value).strip()
+
+def _rows_from_sheet(rows) -> List[dict]:
+    """Turn an iterable of cell-value rows into DictReader-style dicts, using
+    the first non-empty row as the header."""
+    header, out = None, []
+    for raw in rows:
+        cells = [_cell_to_text(c) for c in raw]
+        if header is None:
+            if not any(cells):
+                continue                       # skip leading blank rows
+            header = [c.strip() for c in cells]
+            continue
+        if not any(cells):
+            continue                           # skip blank body rows
+        out.append({header[i]: cells[i] for i in range(min(len(header), len(cells)))})
+    return out
+
+class _TableHTMLParser(_html_parser.HTMLParser):
+    """Extract the first HTML <table> as rows of cell text.
+
+    Salesforce and many other tools "export to Excel" by writing an HTML table
+    with an .xls extension, so this is a mainstream case, not an edge case.
+    """
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows: List[List[str]] = []
+        self._row: Optional[List[str]] = None
+        self._cell: Optional[List[str]] = None
+        self._depth = 0
+        self._done = False
+
+    def handle_starttag(self, tag, attrs):
+        if self._done:
+            return
+        if tag == "table":
+            self._depth += 1
+        elif tag == "tr" and self._depth:
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+        elif tag == "br" and self._cell is not None:
+            self._cell.append("\n")
+
+    def handle_endtag(self, tag):
+        if self._done:
+            return
+        if tag in ("td", "th") and self._cell is not None:
+            self._row.append("".join(self._cell).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+        elif tag == "table" and self._depth:
+            self._depth -= 1
+            if self._depth == 0 and self.rows:
+                self._done = True      # first table only
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _rows_from_xml_spreadsheet(content: bytes) -> List[List[str]]:
+    """Parse the XML Spreadsheet 2003 format (also written as .xls)."""
+    import xml.etree.ElementTree as ET
+    ns = "{urn:schemas-microsoft-com:office:spreadsheet}"
+    root = ET.fromstring(content)
+    out: List[List[str]] = []
+    table = root.find(f".//{ns}Worksheet/{ns}Table")
+    if table is None:
+        return out
+    for row in table.findall(f"{ns}Row"):
+        cells = []
+        for cell in row.findall(f"{ns}Cell"):
+            data = cell.find(f"{ns}Data")
+            cells.append((data.text or "").strip() if data is not None else "")
+        out.append(cells)
+    return out
+
+
+def _decode(content: bytes) -> str:
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")
+
+
+def sniff_upload_format(filename: str, content: bytes) -> str:
+    """Identify the real format from the bytes, not the file extension.
+
+    Files named .xls are frequently HTML, XML or tab-separated text; trusting
+    the extension is what produced 'Expected BOF record' errors on perfectly
+    good exports.
+    """
+    if content[:4] == b"PK\x03\x04":
+        return "xlsx"                                    # zip container
+    if content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "xls"                                     # OLE2 / real BIFF
+    head = content[:4096].lstrip()[:1024].lower()
+    if head.startswith(b"<?xml") and b"workbook" in head:
+        return "xmlss"
+    if b"<html" in head or b"<table" in head or head.startswith(b"<!doctype html"):
+        return "html"
+    return "text"                                        # csv / tsv / delimited
+
+
+def parse_rfe_upload(filename: str, content: bytes) -> Tuple[List[dict], List[str]]:
+    """Parse an uploaded RFE file into (rows, headers).
+
+    Accepts real .xlsx/.xlsm and .xls, plus the HTML-table, XML-Spreadsheet and
+    delimited-text files that tools commonly emit with an .xls extension. The
+    Excel readers are imported lazily and report a clear, actionable error if
+    the library is absent, so a missing optional dependency can never stop the
+    app from starting.
+    """
+    if not content:
+        raise HTTPException(400, "That file is empty.")
+    kind = sniff_upload_format(filename, content)
+
+    if kind == "html":
+        parser = _TableHTMLParser()
+        try:
+            parser.feed(_decode(content))
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that file: {str(e)[:200]}")
+        if not parser.rows:
+            raise HTTPException(400,
+                "That file looks like an HTML export but contains no table.")
+        return _dicts_from_rows(parser.rows)
+
+    if kind == "xmlss":
+        try:
+            rows = _rows_from_xml_spreadsheet(content)
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that XML spreadsheet: {str(e)[:200]}")
+        if not rows:
+            raise HTTPException(400, "That XML spreadsheet contains no rows.")
+        return _dicts_from_rows(rows)
+
+    if kind == "xlsx":
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(501, "Reading .xlsx needs the 'openpyxl' package on "
+                                     "the server. Save the file as CSV, or ask an "
+                                     "administrator to run: pip install openpyxl")
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            rows = _rows_from_sheet(wb[wb.sheetnames[0]].iter_rows(values_only=True))
+            wb.close()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that Excel file: {str(e)[:200]}")
+
+    elif kind == "xls":
+        try:
+            import xlrd
+        except ImportError:
+            raise HTTPException(501, "Reading legacy .xls needs the 'xlrd' package on "
+                                     "the server. Save the file as CSV or .xlsx, or ask "
+                                     "an administrator to run: pip install xlrd")
+        try:
+            book = xlrd.open_workbook(file_contents=content)
+            sheet = book.sheet_by_index(0)
+
+            def _xls_rows():
+                # xlrd hands back dates as raw Excel serial numbers (e.g. 46235)
+                # with the type flagged on the cell, so they must be converted
+                # here — otherwise created_date is nonsense and the report's
+                # recency scoring and NEW/GROWING badges are silently wrong.
+                for r in range(sheet.nrows):
+                    out = []
+                    for cell in sheet.row(r):
+                        if cell.ctype == xlrd.XL_CELL_DATE:
+                            try:
+                                out.append(xlrd.xldate_as_datetime(cell.value, book.datemode))
+                                continue
+                            except Exception:
+                                pass
+                        out.append(cell.value)
+                    yield out
+
+            rows = _rows_from_sheet(_xls_rows())
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Could not read that Excel file: {str(e)[:200]}")
+
+    else:
+        # Delimited text. Sniff the delimiter — exports named .xls are often
+        # tab-separated, and a comma-only reader turns each line into one cell.
+        text = _decode(content)
+        sample = text[:8192]
+        try:
+            delim = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+        except Exception:
+            first = sample.splitlines()[0] if sample.splitlines() else ""
+            delim = max(",;\t|", key=first.count) if first else ","
+        reader = csv.DictReader(io.StringIO(text), delimiter=delim)
+        rows = [{(k or "").strip(): v for k, v in r.items()} for r in reader]
+        return rows, [(h or "").strip() for h in (reader.fieldnames or [])]
+
+    return rows, (list(rows[0].keys()) if rows else [])
+
+
+def _dicts_from_rows(rows: List[List[str]]) -> Tuple[List[dict], List[str]]:
+    """Shared tail for the row-list parsers: first non-empty row is the header."""
+    dicts = _rows_from_sheet(rows)
+    return dicts, (list(dicts[0].keys()) if dicts else [])
+
+def _set_report_progress(report_id: str, stage: str, pct: int) -> None:
+    """Record a generation stage so the UI can show what is actually happening
+    rather than an unexplained spinner."""
+    try:
+        conn = get_db()
+        conn.execute("UPDATE report_datasets SET stage=?, pct=? WHERE report_id=?",
+                     (stage, max(0, min(100, int(pct))), report_id))
+        conn.commit(); conn.close()
+    except Exception:
+        pass
+
+def _generate_report_dataset(report_id: str, kind: str, run_id: str) -> None:
+    """Background job: render the report for an uploaded dataset and store it.
+    Runs for as long as it needs — the UI polls stage/pct for progress."""
+    try:
+        _set_report_progress(report_id, "Loading your RFEs…", 10)
+        if kind == "weekly":
+            from scoring.weekly_report_generator import generate_report as _gen
+        else:
+            from scoring.pi_report_generator import generate_report as _gen
+
+        def _progress(stage: str, pct: int) -> None:
+            _set_report_progress(report_id, stage, pct)
+
+        try:
+            html = _gen(DB_PATH, run_id, progress=_progress)
+        except TypeError:
+            # Generator without progress support — still works, just coarser.
+            _set_report_progress(report_id, "Building the report…", 45)
+            html = _gen(DB_PATH, run_id)
+
+        _set_report_progress(report_id, "Saving…", 95)
+        conn = get_db()
+        conn.execute("UPDATE report_datasets SET status='ready', html=?, error=NULL, "
+                     "stage='Ready', pct=100 WHERE report_id=?", (html, report_id))
+        conn.commit(); conn.close()
+    except Exception as e:
+        try:
+            conn = get_db()
+            conn.execute("UPDATE report_datasets SET status='error', error=?, "
+                         "stage='Failed' WHERE report_id=?", (str(e)[:500], report_id))
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+
+@app.post("/api/reports/{kind}/upload")
+async def api_report_upload(kind: str, background: BackgroundTasks,
+                            file: UploadFile = File(...), label: str = Form("")):
+    _check_kind(kind)
+    content = await file.read()
+    records, headers = parse_rfe_upload(file.filename or "", content)
+    col_map = detect_columns(headers)
+    if not records:
+        raise HTTPException(400, "That file has no rows.")
+    if not col_map.get("case_number") and not col_map.get("subject"):
+        raise HTTPException(400,
+            "Could not find a case number or subject column. Expected headers like "
+            "'Case Number' and 'Subject'. Found: " + (", ".join(headers[:12]) or "none"))
+
+    report_id = str(uuid.uuid4())
+    run_id = f"report-{report_id}"      # namespaced; never written to run_meta
+    now = datetime.utcnow().isoformat()
+    conn = get_db(); cur = conn.cursor()
+    for rec in records:
+        def g(field):
+            col = col_map.get(field)
+            return (rec.get(col) or "").strip() if col else ""
+        cur.execute(
+            "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
+            "account_arr,status,domain,sub_domain,severity,created_date,pulled_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, g("case_number"), g("subject"), g("description"), g("account_name"),
+             parse_arr(g("account_arr")), g("status"), g("domain"), g("sub_domain"),
+             g("severity"), g("created_date"), now))
+
+    # Same domain inference the shared import does, so grouping behaves alike.
+    for br in cur.execute("SELECT id, subject, description FROM rfe_pulls "
+                          "WHERE run_id=? AND (domain IS NULL OR domain='')",
+                          (run_id,)).fetchall():
+        inferred = _map_domain("", f"{br['subject'] or ''} {br['description'] or ''}")
+        if inferred and inferred != "Other":
+            conn.execute("UPDATE rfe_pulls SET domain=? WHERE id=?", (inferred, br["id"]))
+
+    clean_label = (label or "").strip() or (file.filename or "Untitled").rsplit(".", 1)[0]
+    cur.execute("INSERT INTO report_datasets (report_id,kind,label,source_filename,run_id,"
+                "rfe_count,status,created_at) VALUES (?,?,?,?,?,?, 'generating', ?)",
+                (report_id, kind, clean_label[:120], file.filename or "", run_id,
+                 len(records), now))
+    conn.commit(); conn.close()
+
+    background.add_task(_generate_report_dataset, report_id, kind, run_id)
+    return {"report_id": report_id, "kind": kind, "label": clean_label,
+            "rfe_count": len(records), "status": "generating", "created_at": now}
+
+@app.get("/api/reports/{kind}/{report_id}/status")
+async def api_report_status(kind: str, report_id: str):
+    _check_kind(kind)
+    conn = get_db()
+    row = conn.execute("SELECT report_id,kind,label,rfe_count,status,error,created_at,"
+                       "stage,pct FROM report_datasets WHERE report_id=? AND kind=?",
+                       (report_id, kind)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Report not found.")
+    return dict(row)
+
+@app.get("/api/reports/{kind}/{report_id}", response_class=HTMLResponse)
+async def api_report_html(kind: str, report_id: str):
+    _check_kind(kind)
+    conn = get_db()
+    row = conn.execute("SELECT status,html,error FROM report_datasets "
+                       "WHERE report_id=? AND kind=?", (report_id, kind)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Report not found.")
+    if row["status"] != "ready":
+        raise HTTPException(409, f"Report is not ready ({row['status']}).")
+    return HTMLResponse(content=row["html"],
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+@app.delete("/api/reports/{kind}/{report_id}")
+async def api_report_delete(kind: str, report_id: str):
+    _check_kind(kind)
+    conn = get_db()
+    row = conn.execute("SELECT run_id FROM report_datasets WHERE report_id=? AND kind=?",
+                       (report_id, kind)).fetchone()
+    if not row:
+        conn.close(); raise HTTPException(404, "Report not found.")
+    conn.execute("DELETE FROM rfe_pulls WHERE run_id=?", (row["run_id"],))
+    conn.execute("DELETE FROM report_datasets WHERE report_id=?", (report_id,))
+    conn.commit(); conn.close()
+    return {"deleted": True, "report_id": report_id}
 
 # ─── Weekly Analysis (RFE state-assignment report) ────────────────────────────
 # Implements the Cynet weekly/bi-weekly report skill natively from the DB.

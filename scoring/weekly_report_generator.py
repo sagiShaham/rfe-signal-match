@@ -265,25 +265,38 @@ def classify_section(sf_domain: str, subject: str, description: str) -> str:
     return "platform"
 
 
-def load_rfes(db_path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Load the latest run's RFEs, backfilling descriptions from earlier runs.
+def load_rfes(db_path: str, run_id: str | None = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Load a run's RFEs, backfilling descriptions from other runs.
+
+    Pass `run_id` to report on a specific dataset — e.g. a CSV a PM uploaded to
+    the Weekly Analysis tab, which is deliberately independent of the shared
+    Signal Match dump. With no `run_id`, the latest shared run is used.
 
     The Salesforce SOQL pull does not always include Description. When the
-    latest run lacks one, the same case_number from an earlier run (e.g. a CSV
+    chosen run lacks one, the same case_number from another run (e.g. a CSV
     import) is used so PM summaries can still be written.
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     meta: Dict[str, Any] = {}
     try:
-        row = conn.execute(
-            "SELECT run_id, started_at, rfe_count, source FROM run_meta "
-            "ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
-        if not row:
-            return [], meta
-        meta = dict(row)
-        run_id = row["run_id"]
+        if run_id:
+            # An uploaded report dataset has no run_meta row by design — it must
+            # not become "the latest run" and hijack Signal Match.
+            row = conn.execute(
+                "SELECT run_id, started_at, rfe_count, source FROM run_meta WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            meta = dict(row) if row else {"run_id": run_id}
+        else:
+            row = conn.execute(
+                "SELECT run_id, started_at, rfe_count, source FROM run_meta "
+                "ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return [], meta
+            meta = dict(row)
+            run_id = row["run_id"]
 
         rows = conn.execute(
             """SELECT case_number, subject, description, account_name, account_arr,
@@ -910,13 +923,26 @@ color:#1a2340;padding:60px;text-align:center">
 <p style="color:#5a6a8a">{_esc(message)}</p></body></html>"""
 
 
-def generate_report(db_path: str) -> str:
-    """Build the self-contained weekly-analysis HTML report."""
+def generate_report(db_path: str, run_id: str | None = None, progress=None) -> str:
+    """Build the self-contained weekly-analysis HTML report.
+
+    `run_id` selects an uploaded dataset; omit it for the shared latest run.
+    `progress` is an optional callable(stage_text, pct) used to report what the
+    build is doing, so the UI can show real status instead of a bare spinner.
+    """
+    def _tick(stage: str, pct: int) -> None:
+        if progress:
+            try:
+                progress(stage, pct)
+            except Exception:
+                pass          # progress reporting must never break the report
+
     ensure_tables(db_path)
-    records, meta = load_rfes(db_path)
+    _tick("Loading your RFEs…", 15)
+    records, meta = load_rfes(db_path, run_id)
     if not records:
-        return _empty_page("No RFE data found. Import a CSV or pull from "
-                           "Salesforce on the Data Sources tab, then reopen this tab.")
+        return _empty_page("No RFE data found. Upload a CSV of RFEs on the "
+                           "Weekly Analysis tab to generate a report.")
 
     report_date, retro = report_date_for(records)
     window_start = report_date - timedelta(days=14)
@@ -932,10 +958,13 @@ def generate_report(db_path: str) -> str:
     for r in records:
         by_section[r["_section"]].append(r)
 
-    clusters_by_section = {
-        sid: build_clusters(sorted(by_section.get(sid, []), key=lambda r: -r["_score"]), sid)
-        for sid in DOMAIN_IDS
-    }
+    _tick(f"Grouping {len(records)} RFEs into themes…", 40)
+    clusters_by_section = {}
+    for i, sid in enumerate(DOMAIN_IDS):
+        clusters_by_section[sid] = build_clusters(
+            sorted(by_section.get(sid, []), key=lambda r: -r["_score"]), sid)
+        _tick(f"Grouping {SECTION_NAME.get(sid, sid)}…",
+              40 + int(30 * (i + 1) / len(DOMAIN_IDS)))
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
     nav = []
@@ -1121,6 +1150,7 @@ def generate_report(db_path: str) -> str:
         },
     }
 
+    _tick("Rendering charts and pages…", 88)
     return _page_shell(sidebar, "".join(pages), chart_data)
 
 

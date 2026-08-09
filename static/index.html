@@ -265,6 +265,38 @@ input:checked+.toggle-slider:before{transform:translateX(18px)}
 .nav-sep{border-top:1px solid var(--border)}
 .sidebar-footer{color:var(--faint,#94a3b8)}
 .nav-adv-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9aa4b6;padding:0 10px 6px}
+/* Data Sources sits under Signal Match as a sub-item */
+.nav-sub{margin-left:14px;font-size:12.5px}
+.nav-sub::before{content:"";position:absolute;left:-10px;top:50%;width:6px;height:1px;background:var(--border)}
+.nav-sub{position:relative}
+.nav-beta{margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(251,191,36,.18);color:#f59e0b;border:1px solid rgba(245,158,11,.35);border-radius:4px;padding:1px 5px;line-height:1.5;text-transform:uppercase}
+/* Report workspaces (Weekly Analysis · PI Report) */
+.ws-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.ws-hint{font-size:12px;color:var(--text-muted)}
+.ws-list{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:8px;margin-bottom:14px}
+.ws-list-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);padding:6px 8px 8px}
+.ws-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px}
+.ws-row+.ws-row{border-top:1px solid var(--border)}
+.ws-row:hover{background:var(--bg)}
+.ws-row.active{background:#eff6ff}
+.ws-row-title{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws-row-meta{font-size:11.5px;color:var(--text-muted);margin-top:1px}
+.ws-badge{font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;border-radius:5px;padding:2px 7px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.ws-badge.ready{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
+.ws-badge.gen{background:#e0f2fe;color:#075985;border:1px solid #bae6fd}
+.ws-badge.err{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.ws-row-meta.err{color:#b91c1c}
+.ws-progress{height:4px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px;max-width:340px}
+.ws-progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
+/* Name-this-report dialog (replaces the browser's prompt() popup) */
+.ws-modal-back{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px}
+.ws-modal{background:var(--card);border-radius:var(--radius);box-shadow:0 20px 60px rgba(0,0,0,.28);padding:22px 24px;width:100%;max-width:420px}
+.ws-modal-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.ws-modal-sub{font-size:12.5px;color:var(--text-muted);margin-bottom:14px}
+.ws-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+/* Signal Match shared-data banner */
+.shared-data-note{display:flex;align-items:flex-start;gap:9px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:8px;padding:9px 12px;font-size:12px;line-height:1.55;margin-bottom:14px}
+.shared-data-note strong{font-weight:700}
 
 /* Summary tiles */
 .sig-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0 18px}
@@ -623,7 +655,8 @@ function _nav(page) {
   }
   if (page==='sources') { try{loadDocs();loadStats();}catch(e){} }
   if (page==='scoring') { try{loadScoringConfig();}catch(e){} }
-  if (page==='weekly')  { try{refreshWeeklyStatus();}catch(e){} }
+  if (page==='weekly')    { try{renderWorkspace('weekly');}catch(e){} }
+  if (page==='pi-report') { try{renderWorkspace('pi');}catch(e){} }
 }
 // Keep navigate() as alias for legacy calls in JS body
 function navigate(page) { _nav(page); }
@@ -644,21 +677,25 @@ function navigate(page) { _nav(page); }
     <span class="nav-badge" id="badge-signal" style="display:none">0</span>
   </a>
 
-  <a class="nav-item" data-page="weekly" href="#weekly" onclick="event.preventDefault();_nav('weekly')" style="display:flex">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9"/></svg>
-    Weekly Analysis
-  </a>
-
-  <a class="nav-item" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
+  <a class="nav-item nav-sub" data-page="sources" href="#sources" onclick="event.preventDefault();_nav('sources')" style="display:flex">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     Data Sources
     <span class="nav-badge" id="badge-sources" style="display:none"></span>
   </a>
 
+  <div class="nav-sep"></div>
+  <div class="nav-adv-label">Other tools</div>
+
+  <a class="nav-item" data-page="weekly" href="#weekly" onclick="event.preventDefault();_nav('weekly')" style="display:flex">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h9"/></svg>
+    Weekly Analysis
+    <span class="nav-beta">Beta</span>
+  </a>
+
   <a class="nav-item" data-page="pi-report" href="#pi-report" onclick="event.preventDefault();_nav('pi-report')" style="display:flex">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><polyline points="7 15 10 12 13 15 17 11"/></svg>
     PI Report
-    <span style="margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(251,191,36,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:4px;padding:1px 5px;line-height:1.5;text-transform:uppercase">Beta</span>
+    <span class="nav-beta">Beta</span>
   </a>
 
   <div class="nav-sep"></div>
@@ -825,6 +862,12 @@ function navigate(page) { _nav(page); }
          PAGE: Signal Match
     ══════════════════════════════════════════════════ -->
     <div class="page active" id="page-signal">
+
+      <!-- Shared-dataset warning: everyone sees the same last upload -->
+      <div class="shared-data-note">
+        <span style="flex-shrink:0">ℹ️</span>
+        <div><strong>Shared view.</strong> This shows the <strong>most recent RFE upload</strong><span id="sig-data-meta"></span>. It is shared by everyone — uploading a new dump on <a href="#sources" onclick="event.preventDefault();_nav('sources')">Data Sources</a> replaces it for all PMs. For a report on your own set of RFEs without affecting anyone, use <a href="#weekly" onclick="event.preventDefault();_nav('weekly')">Weekly Analysis</a>.</div>
+      </div>
 
       <!-- Summary tiles -->
       <div class="sig-tiles">
@@ -1047,25 +1090,12 @@ function navigate(page) { _nav(page); }
          PAGE: PI Report
     ══════════════════════════════════════════════════ -->
     <div class="page" id="page-pi-report" style="display:none;padding:20px">
-      <div id="pi-report-placeholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:60px 20px">
-        <div style="font-size:48px">📊</div>
-        <h2 style="font-size:18px;font-weight:700;color:var(--text)">PI Planning Report</h2>
-        <p style="color:var(--text-muted);font-size:14px;text-align:center;max-width:400px">
-          Generate a full strategic PI Planning report from your current RFE data — clusters, ARR impact, trends, and actionable epics per domain.
-        </p>
-        <button class="btn btn-primary" onclick="loadPiReport()" style="padding:10px 28px;font-size:14px">
-          Generate PI Report
-        </button>
+      <div class="info-box" style="margin-top:4px">
+        <strong>PI Planning Report</strong> — clusters, ARR impact, trends and actionable
+        epics per domain. Upload your own CSV of RFEs; the report is built from exactly
+        that set and is yours alone. It does not touch the shared Signal Match data.
       </div>
-      <div id="pi-report-loading" style="display:none;flex-direction:column;align-items:center;gap:12px;padding:60px 20px">
-        <div class="spinner" style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite"></div>
-        <span style="color:var(--text-muted);font-size:14px">Generating report…</span>
-      </div>
-      <div id="pi-report-header" style="display:none;margin-bottom:12px;display:flex;align-items:center;gap:12px">
-        <button class="btn btn-ghost btn-sm" onclick="reloadPiReport()">↺ Regenerate</button>
-        <span style="font-size:12px;color:var(--text-muted)" id="pi-report-timestamp"></span>
-      </div>
-      <iframe id="pi-report-iframe" src="" style="width:100%;height:85vh;border:none;border-radius:8px;display:none"></iframe>
+      <div id="ws-pi"></div>
     </div><!-- /page-pi-report -->
 
     <!-- ══════════════════════════════════════════════
@@ -1074,34 +1104,13 @@ function navigate(page) { _nav(page); }
     <div class="page" id="page-weekly" style="display:none;padding:20px">
       <div class="info-box" style="margin-top:4px">
         <strong>Weekly Analysis</strong> — decide which state to assign each RFE
-        (Add to Backlog · Out of Scope · Needs Info · Deferred). Every request is
-        grouped into a thematic cluster per product domain, with a PM Decision
-        Summary explaining what is broken, the operational consequence, and the
-        routing signal. Decisions save as you click.
+        (Add to Backlog · Out of Scope · Needs Info · Deferred). Upload your own CSV
+        of RFEs; the report is built from exactly that set and is yours alone — it does
+        not touch the shared Signal Match data. Every request is grouped into a thematic
+        cluster per product domain. Decisions save as you click.
       </div>
 
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="btn btn-primary btn-sm" id="btn-weekly-load" onclick="loadWeeklyReport()">📈 Generate report</button>
-        <button class="btn btn-ghost btn-sm" id="btn-weekly-summaries" onclick="generateWeeklySummaries()">🧠 Generate PM summaries</button>
-        <button class="btn btn-ghost btn-sm" onclick="loadWeeklyReport(true)">↺ Refresh</button>
-        <span id="weekly-status" style="font-size:12px;color:var(--text-muted)"></span>
-      </div>
-
-      <div id="weekly-summary-progress" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:12px;box-shadow:var(--shadow)">
-        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px">
-          <span id="weekly-sum-label" style="color:var(--text-muted)">Generating PM summaries…</span>
-          <span id="weekly-sum-pct" style="color:var(--accent)">0%</span>
-        </div>
-        <div class="progress-wrap"><div class="progress-fill" id="weekly-sum-bar" style="width:0%"></div></div>
-      </div>
-
-      <div id="weekly-empty" class="empty-state" style="padding:40px 24px">
-        <div class="big-icon">📈</div>
-        <h3>Weekly Analysis</h3>
-        <p>Generate the report to review every open RFE by domain and assign each one a state.</p>
-        <button class="btn btn-primary" onclick="loadWeeklyReport()">📈 Generate report</button>
-      </div>
-      <iframe id="weekly-iframe" src="" style="width:100%;height:85vh;border:none;border-radius:8px;display:none"></iframe>
+      <div id="ws-weekly"></div>
     </div><!-- /page-weekly -->
 
   </div><!-- /content -->
@@ -1290,85 +1299,226 @@ function formatDescriptionHtml(text) {
   document.addEventListener('mouseout',   e => { if (e.target.closest('.score-tip')) tip().style.display = 'none'; });
 })();
 
-// ─── PI Report ────────────────────────────────────────────────────────────────
-function loadPiReport() {
-  document.getElementById('pi-report-placeholder').style.display = 'none';
-  document.getElementById('pi-report-loading').style.display = 'flex';
-  document.getElementById('pi-report-header').style.display = 'none';
-  document.getElementById('pi-report-iframe').style.display = 'none';
-  var iframe = document.getElementById('pi-report-iframe');
-  iframe.onload = function() {
-    document.getElementById('pi-report-loading').style.display = 'none';
-    document.getElementById('pi-report-header').style.display = 'flex';
-    iframe.style.display = 'block';
-    var ts = document.getElementById('pi-report-timestamp');
-    if (ts) ts.textContent = 'Generated at ' + new Date().toLocaleTimeString();
-  };
-  iframe.onerror = function() {
-    document.getElementById('pi-report-loading').style.display = 'none';
-    document.getElementById('pi-report-placeholder').style.display = 'flex';
-    toast('Failed to generate PI report', 'error');
-  };
-  iframe.src = '/api/pi-report';
+// ─── Report workspaces (Weekly Analysis · PI Report) ──────────────────────────
+// Each PM uploads their own CSV and gets reports built from exactly that set,
+// independent of the shared Signal Match dump. The list of "my reports" lives in
+// this browser's localStorage — there is no login, so ownership is per-browser.
+// The report data itself stays on the server (they are far too big to store here).
+var WS = {
+  weekly: {key: 'rfe_reports_weekly', title: 'Weekly Analysis', icon: '📈',
+           blurb: 'Review every RFE by domain and assign each one a state.'},
+  pi:     {key: 'rfe_reports_pi',     title: 'PI Report',       icon: '📊',
+           blurb: 'Clusters, ARR impact and actionable epics per domain.'}
+};
+var _wsOpen = {};       // kind -> currently open report_id
+var _wsPoll = {};       // kind -> interval id
+
+function _wsList(kind) {
+  try { return JSON.parse(localStorage.getItem(WS[kind].key) || '[]'); }
+  catch (e) { return []; }
 }
-function reloadPiReport() {
-  loadPiReport();
+function _wsSave(kind, list) {
+  try { localStorage.setItem(WS[kind].key, JSON.stringify(list)); } catch (e) {}
+}
+function _wsAdd(kind, rec) {
+  var list = _wsList(kind);
+  list.unshift(rec);
+  _wsSave(kind, list);
+}
+function _wsUpdate(kind, id, patch) {
+  var list = _wsList(kind).map(function(r) {
+    return r.id === id ? Object.assign({}, r, patch) : r;
+  });
+  _wsSave(kind, list);
 }
 
-// ─── Weekly Analysis (RFE state assignment) ───────────────────────────────────
-var _weeklyLoaded = false;
-var _weeklySumTimer = null;
+function renderWorkspace(kind) {
+  var host = document.getElementById('ws-' + kind);
+  if (!host) return;
+  var cfg = WS[kind], list = _wsList(kind);
 
-async function refreshWeeklyStatus() {
-  var el = document.getElementById('weekly-status');
-  var btn = document.getElementById('btn-weekly-summaries');
+  var rows = list.map(function(r) {
+    var badge = r.status === 'ready'
+      ? '<span class="ws-badge ready">Ready</span>'
+      : r.status === 'error'
+        ? '<span class="ws-badge err" title="' + esc(r.error || '') + '">Failed</span>'
+        : '<span class="ws-badge gen"><span class="spinner" style="width:9px;height:9px;border-width:2px;border-top-color:currentColor;border-color:rgba(0,0,0,.15)"></span> ' +
+            Math.max(0, Math.min(100, r.pct || 0)) + '%</span>';
+    var open = r.status === 'ready'
+      ? '<button class="btn btn-primary btn-sm" onclick="wsOpen(\'' + kind + '\',\'' + r.id + '\')">Open</button>'
+      : '';
+    // While building, the row shows the actual stage and a progress bar rather
+    // than an unexplained spinner.
+    var meta = r.status === 'generating'
+      ? '<div class="ws-row-meta">' + esc(r.stage || 'Starting…') + '</div>' +
+        '<div class="ws-progress"><div class="ws-progress-fill" style="width:' +
+          Math.max(2, Math.min(100, r.pct || 0)) + '%"></div></div>'
+      : r.status === 'error'
+        ? '<div class="ws-row-meta err">' + esc(r.error || 'Generation failed') + '</div>'
+        : '<div class="ws-row-meta">' + (r.rfe_count || 0) + ' RFEs · ' +
+            esc(fmtDate(r.created_at) || '') + '</div>';
+    return '<div class="ws-row' + (_wsOpen[kind] === r.id ? ' active' : '') + '">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="ws-row-title">' + esc(r.label) + '</div>' + meta +
+      '</div>' + badge + open +
+      '<button class="btn btn-ghost btn-sm" title="Delete this report" ' +
+        'onclick="wsDelete(\'' + kind + '\',\'' + r.id + '\')">🗑</button>' +
+    '</div>';
+  }).join('');
+
+  host.innerHTML =
+    '<div class="ws-bar">' +
+      '<button class="btn btn-primary btn-sm" onclick="wsPick(\'' + kind + '\')">＋ New report</button>' +
+      '<input type="file" accept=".csv,.xlsx,.xlsm,.xls" id="ws-file-' + kind + '" style="display:none" ' +
+        'onchange="wsUpload(\'' + kind + '\', this)">' +
+      (kind === 'weekly'
+        ? '<button class="btn btn-ghost btn-sm" id="btn-weekly-summaries" onclick="generateWeeklySummaries()">🧠 Generate PM summaries</button>'
+        : '') +
+      '<span class="ws-hint">Upload a CSV or Excel file of RFEs — same columns as the Data Sources import.</span>' +
+    '</div>' +
+    (list.length
+      ? '<div class="ws-list"><div class="ws-list-label">My reports (saved in this browser)</div>' + rows + '</div>'
+      : '<div class="empty-state" style="padding:40px 24px">' +
+          '<div class="big-icon">' + cfg.icon + '</div><h3>' + esc(cfg.title) + '</h3>' +
+          '<p>' + esc(cfg.blurb) + '<br>Upload a CSV of RFEs to build your first report.</p>' +
+          '<button class="btn btn-primary" onclick="wsPick(\'' + kind + '\')">＋ New report</button>' +
+        '</div>') +
+    (kind === 'weekly'
+      ? '<div id="weekly-summary-progress" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin:12px 0;box-shadow:var(--shadow)">' +
+          '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px">' +
+          '<span id="weekly-sum-label" style="color:var(--text-muted)">Generating PM summaries…</span>' +
+          '<span id="weekly-sum-pct" style="color:var(--accent)">0%</span></div>' +
+          '<div class="progress-wrap"><div class="progress-fill" id="weekly-sum-bar" style="width:0%"></div></div></div>'
+      : '') +
+    '<iframe id="ws-frame-' + kind + '" src="" style="width:100%;height:85vh;border:none;' +
+      'border-radius:8px;display:' + (_wsOpen[kind] ? 'block' : 'none') + '"></iframe>';
+
+  if (_wsOpen[kind]) {
+    var f = document.getElementById('ws-frame-' + kind);
+    if (f && !f.src) f.src = '/api/reports/' + kind + '/' + _wsOpen[kind];
+  }
+  // Resume polling for anything still building (e.g. after a page refresh).
+  list.forEach(function(r) { if (r.status === 'generating') _wsPollOne(kind, r.id); });
+}
+
+function wsPick(kind) {
+  var el = document.getElementById('ws-file-' + kind);
+  if (el) { el.value = ''; el.click(); }
+}
+
+// Replaces the browser's prompt() dialog, which showed a raw "localhost:8099
+// says" chrome popup and looked like a phishing box.
+function _wsAskName(defaultName) {
+  return new Promise(function(resolve) {
+    var back = document.createElement('div');
+    back.className = 'ws-modal-back';
+    back.innerHTML =
+      '<div class="ws-modal" role="dialog" aria-modal="true">' +
+        '<div class="ws-modal-title">Name this report</div>' +
+        '<div class="ws-modal-sub">So you can find it again in your list.</div>' +
+        '<input class="email-input" id="ws-name-input" maxlength="120">' +
+        '<div class="ws-modal-actions">' +
+          '<button class="btn btn-ghost btn-sm" data-act="cancel">Cancel</button>' +
+          '<button class="btn btn-primary btn-sm" data-act="ok">Create report</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(back);
+    var input = back.querySelector('#ws-name-input');
+    input.value = defaultName || '';
+    var done = function(val) { back.remove(); resolve(val); };
+    back.querySelector('[data-act="cancel"]').onclick = function() { done(null); };
+    back.querySelector('[data-act="ok"]').onclick = function() { done(input.value.trim()); };
+    back.onclick = function(e) { if (e.target === back) done(null); };
+    input.onkeydown = function(e) {
+      if (e.key === 'Enter') done(input.value.trim());
+      if (e.key === 'Escape') done(null);
+    };
+    setTimeout(function() { input.focus(); input.select(); }, 30);
+  });
+}
+
+async function wsUpload(kind, input) {
+  var file = input && input.files && input.files[0];
+  if (!file) return;
+  if (!/\.(csv|xlsx|xlsm|xls|tsv|txt)$/i.test(file.name)) {
+    toast('Please choose a .csv, .xlsx or .xls file', 'error'); return;
+  }
+  var label = await _wsAskName(file.name.replace(/\.(csv|xlsx|xlsm|xls|tsv|txt)$/i, ''));
+  if (label === null) return;                       // cancelled
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('label', label || '');
+  toast('Uploading ' + file.name + '…', 'info');
   try {
-    var st = await (await fetch('/api/weekly-report/status')).json();
-    if (el) {
-      var bits = [st.total_rfes + ' RFEs',
-                  st.summaries_cached + ' PM summaries',
-                  st.decided + ' states assigned'];
-      if (st.no_description > 0) bits.push(st.no_description + ' without a description');
-      el.textContent = bits.join(' · ');
-    }
-    if (btn) {
-      if (!st.llm_available) {
-        btn.disabled = true;
-        btn.title = 'Requires ANTHROPIC_API_KEY on the server — raw descriptions are never used as summaries.';
-      } else if (st.pending === 0) {
-        btn.disabled = true;
-        btn.title = 'All eligible RFEs already have a PM summary.';
-      } else {
-        btn.disabled = false;
-        btn.title = 'Generate PM Decision Summaries for ' + st.pending + ' RFE(s)';
-        btn.textContent = '🧠 Generate PM summaries (' + st.pending + ')';
-      }
-    }
-    return st;
+    var res = await fetch('/api/reports/' + kind + '/upload', {method: 'POST', body: fd});
+    var data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+    _wsAdd(kind, {id: data.report_id, label: data.label, rfe_count: data.rfe_count,
+                  created_at: data.created_at, status: 'generating'});
+    renderWorkspace(kind);
+    toast('Building your report from ' + data.rfe_count + ' RFEs…', 'success');
+    _wsPollOne(kind, data.report_id);
   } catch (e) {
-    if (el) el.textContent = 'Status unavailable';
-    return null;
+    toast('Upload failed: ' + e.message, 'error');
   }
 }
 
-function loadWeeklyReport(force) {
-  var frame = document.getElementById('weekly-iframe');
-  var empty = document.getElementById('weekly-empty');
-  var btn = document.getElementById('btn-weekly-load');
-  if (!frame) return;
-  if (_weeklyLoaded && !force) { frame.style.display = 'block'; return; }
-  if (empty) empty.style.display = 'none';
-  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
-  frame.style.display = 'none';
-  frame.onload = function() {
-    frame.style.display = 'block';
-    _weeklyLoaded = true;
-    if (btn) { btn.disabled = false; btn.textContent = '📈 Generate report'; }
-    refreshWeeklyStatus();
-  };
-  // cache-bust so a regenerate after new summaries/decisions is visible
-  frame.src = '/api/weekly-report?t=' + Date.now();
+function _wsPollOne(kind, id) {
+  if (_wsPoll[kind + id]) return;                   // already watching this one
+  _wsPoll[kind + id] = setInterval(async function() {
+    try {
+      var res = await fetch('/api/reports/' + kind + '/' + id + '/status');
+      if (res.status === 404) {                     // deleted elsewhere
+        clearInterval(_wsPoll[kind + id]); delete _wsPoll[kind + id];
+        return;
+      }
+      var st = await res.json();
+      if (st.status === 'generating') {
+        // Keep the row's stage/percentage live while it builds.
+        var cur = _wsList(kind).find(function(r) { return r.id === id; }) || {};
+        if (cur.stage !== st.stage || cur.pct !== st.pct) {
+          _wsUpdate(kind, id, {stage: st.stage, pct: st.pct});
+          renderWorkspace(kind);
+        }
+        return;
+      }
+      clearInterval(_wsPoll[kind + id]); delete _wsPoll[kind + id];
+      _wsUpdate(kind, id, {status: st.status, rfe_count: st.rfe_count,
+                           stage: st.stage, pct: st.pct, error: st.error});
+      if (st.status === 'ready') {
+        toast('“' + st.label + '” is ready', 'success');
+        if (!_wsOpen[kind]) { _wsOpen[kind] = id; }
+      } else {
+        toast('Report failed: ' + (st.error || 'unknown error'), 'error');
+      }
+      renderWorkspace(kind);
+    } catch (e) { /* transient — keep polling */ }
+  }, 3000);
 }
+
+function wsOpen(kind, id) {
+  _wsOpen[kind] = id;
+  renderWorkspace(kind);
+  var f = document.getElementById('ws-frame-' + kind);
+  if (f) { f.src = '/api/reports/' + kind + '/' + id + '?t=' + Date.now(); f.style.display = 'block'; }
+}
+
+async function wsDelete(kind, id) {
+  var rec = _wsList(kind).find(function(r) { return r.id === id; });
+  if (!confirm('Delete “' + (rec ? rec.label : id) + '”? This removes the report and its uploaded RFEs.')) return;
+  try { await fetch('/api/reports/' + kind + '/' + id, {method: 'DELETE'}); } catch (e) {}
+  _wsSave(kind, _wsList(kind).filter(function(r) { return r.id !== id; }));
+  if (_wsOpen[kind] === id) {
+    _wsOpen[kind] = null;
+    var f = document.getElementById('ws-frame-' + kind);
+    if (f) { f.src = ''; f.style.display = 'none'; }
+  }
+  renderWorkspace(kind);
+  toast('Report deleted', 'info');
+}
+
+// Kept for the PM-summaries action, which acts on the shared summary cache.
+var _weeklySumTimer = null;
 
 async function generateWeeklySummaries() {
   var btn = document.getElementById('btn-weekly-summaries');
@@ -1385,7 +1535,7 @@ async function generateWeeklySummaries() {
     if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
     if (!data.job_id) {
       toast(data.message || 'Nothing to generate', 'info');
-      refreshWeeklyStatus();
+      if (btn) { btn.disabled = false; btn.textContent = '🧠 Generate PM summaries'; }
       return;
     }
     if (panel) panel.style.display = 'block';
@@ -1419,9 +1569,8 @@ function _pollWeeklySummaries(jobId) {
         if (st.status === 'error') toast('Summaries failed: ' + st.message, 'error');
         else {
           toast(st.message || 'PM summaries generated', 'success');
-          loadWeeklyReport(true);   // re-render with the new summaries
+          if (_wsOpen.weekly) wsOpen('weekly', _wsOpen.weekly);   // re-render with summaries
         }
-        refreshWeeklyStatus();
       }
     } catch (e) { /* transient — keep polling */ }
   }, 2000);
@@ -2015,6 +2164,17 @@ async function loadStats() {
     const res = await fetch('/api/stats');
     const s = await res.json();
     document.getElementById('stat-total').textContent = s.total ?? '—';
+    // Name the dump behind the shared view, so "whose data is this?" is answerable.
+    const metaEl = document.getElementById('sig-data-meta');
+    if (metaEl) {
+      const when = fmtDate(s.started_at);
+      const via = s.source === 'salesforce' ? 'Salesforce pull' : s.source === 'csv' ? 'CSV upload' : '';
+      const bits = [];
+      if (s.rfe_count) bits.push(s.rfe_count + ' RFEs');
+      if (via) bits.push(via);
+      if (when) bits.push(when);
+      metaEl.textContent = bits.length ? ' (' + bits.join(' · ') + ')' : '';
+    }
     const matchedRfeEl = document.getElementById('stat-matched-rfes');
     if (matchedRfeEl) matchedRfeEl.textContent = s.matched_rfe_count ?? '—';
     const rfeEl = document.getElementById('stat-rfe-big');
