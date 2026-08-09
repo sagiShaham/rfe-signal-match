@@ -387,45 +387,10 @@ function copyEmailToClipboard() {
     .catch(function() { _toast('Copy failed — try manual select', 'error'); });
 }
 
-async function sendEmailFromDrawer() {
-  var f = _readEmailFields();
-  if (!f.to || !_isEmailAddr(f.to.split(';')[0])) {
-    _toast('Enter a valid recipient email in the To field', 'error');
-    document.getElementById('email-to')?.focus();
-    return;
-  }
-  var btn = document.getElementById('btn-send-email');
-  var orig = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Sending…';
-  try {
-    var cluster = _getClusters().find(function(c){ return c.id === drawerClusterId; });
-    var member = cluster && cluster.members && cluster.members[0];
-    var payload = {
-      cluster_id: drawerClusterId,
-      case_number: member ? member.case_number : null,
-      account_name: member ? member.account_name : null,
-      to: f.to, cc: f.cc || null, subject: f.subject, body: f.body
-    };
-    var res = await fetch('/api/send-email-smtp', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    });
-    if (res.status === 501) {
-      _toast('Direct send not configured yet — add SMTP_USER / SMTP_PASS to .env, or use "Outlook draft".', 'error');
-      return;
-    }
-    if (!res.ok) {
-      var err = await res.json().catch(function(){ return {detail: res.statusText}; });
-      throw new Error(err.detail || 'Send failed');
-    }
-    _toast('Email sent ✅', 'success');
-    closeEmailDrawer();
-  } catch(e) {
-    _toast('Send failed: ' + e.message, 'error');
-  } finally {
-    btn.disabled = false; btn.textContent = orig;
-  }
-}
+// sendEmailFromDrawer() was removed along with the "Send Email" button. It
+// posted straight to /api/send-email-smtp, which delivers with no review and no
+// approval — bypassing the RFE Mail Broker entirely. All sending now goes
+// through openTestDrawer() -> the broker -> a reviewer's approval.
 
 function openInOutlook() {
   var f = _readEmailFields();
@@ -1019,11 +984,12 @@ function navigate(page) { _nav(page); }
     <div style="color:var(--text-muted);text-align:center;padding:40px">Generating email…</div>
   </div>
   <div class="drawer-footer" style="flex-wrap:wrap;gap:8px">
-    <button class="btn btn-primary" style="flex:1 1 100%" id="btn-send-email" onclick="sendEmailFromDrawer()">📤 Send Email</button>
+    <!-- The broker is the only send path. The old direct-SMTP "Send Email"
+         button was removed: it bypassed the review-and-approve step entirely. -->
+    <button class="btn btn-primary" style="flex:1 1 100%" title="Stage this email in the RFE Mail Broker for review and approval" onclick="openTestDrawer()">📤 Send via Mail Broker</button>
     <button class="btn btn-ghost btn-sm" style="flex:1" onclick="copyEmailToClipboard()">📋 Copy</button>
     <button class="btn btn-ghost btn-sm" style="flex:1" onclick="openInOutlook()">✉️ Outlook draft</button>
     <button class="btn btn-success btn-sm" style="flex:1" id="drawer-approve-btn" onclick="approveFromDrawer()">✅ Approve</button>
-    <button class="btn btn-ghost btn-sm" style="flex:1 1 100%" title="Stage this email in the RFE Mail Broker for review and approval" onclick="openTestDrawer()">📤 Send via Mail Broker</button>
   </div>
 </div>
 
