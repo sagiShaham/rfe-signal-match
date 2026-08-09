@@ -2,7 +2,7 @@
 
 A FastAPI + vanilla JS tool for Cynet PMs to instantly identify which customer RFEs (feature requests) have already been delivered, are planned in the current PI, or are coming up — so no matched request ever gets missed in a customer conversation.
 
-**Current version: v2.2 — UI makeover** — decluttered Signal Match (one status color, signal-bar match strength, collapsed toolbar), tab reorder, internal test-email via the RFE Mail Broker
+**Current version: v2.3 — Weekly Analysis + customer email** — new Weekly Analysis tab for assigning RFE states, email to any recipient domain via the RFE Mail Broker, and removal of the unreviewed direct-send path
 
 ---
 
@@ -256,7 +256,8 @@ rfe-signal-match/
 | v1.3 | Configurable match thresholds via UI, subject-only clustering, domain+sub-domain grouping |
 | v2.0 | Semantic vector scoring: bi-encoder + cross-encoder + GPU (MPS/CUDA). LLM judge cascade (off by default, ~$0.06/run with GPT-4o-mini). Real-time progress bar. ~4 min full run on Apple M4. |
 | v2.1 | PI Planning Report tab (18 domain tabs, exec dashboard, Plotly charts, timeframe filter). Outlook email integration: editable To/CC, in-drawer Send via Office 365 SMTP, Outlook draft fallback, Graph API path (IT-gated). Live Salesforce pull (SOQL, no CSV export). |
-| **v2.2 — UI makeover** | **Decluttered Signal Match: one status color language (pill), monochrome signal-bar match strength (Strong/Likely/Weak) replacing colored 0-1 chips, raw scores moved to hover/expand, 4 clean summary tiles, collapsed toolbar with a Filters popover, progressive-disclosure rows. Tabs reordered — lands on Signal Match; Scoring Config moved last under "Advanced". Plus: internal test-email — submit controlled `@cynet.com`-only `[TEST]` batches to the production RFE Mail Broker, open its Entra review portal, and monitor status (server-side keys, no customer sending).** |
+| v2.2 — UI makeover | Decluttered Signal Match: one status color language (pill), monochrome signal-bar match strength (Strong/Likely/Weak) replacing colored 0-1 chips, raw scores moved to hover/expand, 4 clean summary tiles, collapsed toolbar with a Filters popover, progressive-disclosure rows. Tabs reordered — lands on Signal Match; Scoring Config moved last under "Advanced". Plus: internal test-email — submit controlled `@cynet.com`-only `[TEST]` batches to the production RFE Mail Broker, open its Entra review portal, and monitor status (server-side keys, no customer sending). |
+| **v2.3 — Weekly Analysis + customer email** | **New Weekly Analysis tab: a native build of the Cynet weekly RFE report for deciding which state to assign each RFE — 10 domain sections plus Executive, cluster-based grouping covering 100% of a domain's RFEs, priority scoring, NEW/GROWING/STABLE trends, Plotly charts, and persisted state decisions. Email: the `@cynet.com` recipient restriction is lifted (any domain, including real customers) with subjects used verbatim — the broker's Entra-gated review-and-approve step remains the guardrail. Security: the unreviewed direct-send path is gone — the "Send Email" button and the `/api/send-email-smtp` and `/api/send-email-graph` endpoints were removed, so the Mail Broker is the only way an email can leave the platform.** |
 
 ---
 
