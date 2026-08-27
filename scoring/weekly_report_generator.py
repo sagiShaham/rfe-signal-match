@@ -11,7 +11,8 @@ of 10 product-domain sections, computes a priority score, groups every RFE into
 a thematic cluster, and renders a single self-contained light-mode HTML report
 with Plotly charts.
 
-PM Decision Summaries are LLM-generated and cached in the `pm_summaries` table.
+PM Decision Summaries are written for every RFE while the report is being
+generated (see `scoring/pm_summary.py`) — no button to press, no API key needed.
 Per the skill's absolute rules, a raw Salesforce description is NEVER used as a
 summary — when no description exists, the mandated TAM-follow-up flag is shown.
 
@@ -20,12 +21,13 @@ LIGHT MODE ONLY. Never use dark backgrounds.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+
+from scoring import pm_summary
 
 # ── Sections (skill: 10 domains + Executive) ─────────────────────────────────
 
@@ -203,10 +205,7 @@ DECISIONS = [
 ]
 DECISION_LABEL = {k: v for k, v in DECISIONS}
 
-NO_DESC_SUMMARY = (
-    "⚠️ No description provided — follow up with TAM before routing. "
-    "Do not proceed to backlog without PM review."
-)
+NO_DESC_SUMMARY = pm_summary.NO_DESC_SUMMARY
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -540,152 +539,22 @@ def save_decision(db_path: str, case_number: str, decision: str,
 
 
 def summary_status(db_path: str) -> Dict[str, Any]:
-    """Coverage stats so the UI can show what still needs generating."""
+    """Coverage stats for the shared run — summaries are written at report time."""
     ensure_tables(db_path)
     records, meta = load_rfes(db_path)
-    needs = [r for r in records if len(r["description"]) > 20 and not r["pm_summary"]]
+    no_desc = [r for r in records
+               if len(r["description"]) < pm_summary.MIN_DESC]
     return {
         "total_rfes": len(records),
         "with_description": meta.get("with_description", 0),
-        "no_description": len(records) - meta.get("with_description", 0),
+        "no_description": len(no_desc),
         "summaries_cached": sum(1 for r in records if r["pm_summary"]),
-        "pending": len(needs),
+        "pending": 0,          # nothing to trigger — generation is automatic
         "backfilled_descriptions": meta.get("backfilled_descriptions", 0),
-        "llm_available": bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
+        "summary_writer": pm_summary.VERSION,
         "decided": sum(1 for r in records if r["decision"]),
         "run_id": meta.get("run_id"),
     }
-
-
-SUMMARY_MODEL = "claude-opus-5"
-
-SUMMARY_SYSTEM = (
-    "You are a senior product manager at Cynet, a B2B cybersecurity company, "
-    "triaging customer feature requests (RFEs).\n\n"
-    "For each RFE write a PM Decision Summary of 2-4 sentences that answers ALL of:\n"
-    "1. What is broken or missing today - the specific gap, NOT a restatement of the subject.\n"
-    "2. The operational consequence - what it blocks, who is affected, what breaks.\n"
-    "3. A PM routing signal where applicable, using this exact wording:\n"
-    "   - '⚠️ This is a bug/defect, not a feature request — route to engineering'\n"
-    "   - '⚠️ Regression — feature previously existed and was removed'\n"
-    "   - '⚠️ Active compliance/security failure — escalate urgently'\n"
-    "   - 'Deal blocker for enterprise prospect'\n"
-    "   - 'Strategic first-mover opportunity'\n"
-    "   - 'Active competitor POC blocker'\n\n"
-    "ABSOLUTE RULES:\n"
-    "- NEVER copy or paste any part of the raw description. Write fresh, in your own words.\n"
-    "- NEVER end a summary with '...' or truncate. Every summary must be complete sentences.\n"
-    "- NEVER use the description as a fallback.\n"
-    "- Be specific and decision-useful. Avoid generic filler like 'this would improve usability'."
-)
-
-SUMMARY_TOOL = {
-    "name": "record_summaries",
-    "description": "Record one PM Decision Summary per RFE.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "summaries": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "case_number": {"type": "string"},
-                        "summary": {
-                            "type": "string",
-                            "description": "2-4 complete sentences, written fresh. Never raw description text.",
-                        },
-                    },
-                    "required": ["case_number", "summary"],
-                },
-            }
-        },
-        "required": ["summaries"],
-    },
-}
-
-
-def generate_summaries(db_path: str, progress=None, batch_size: int = 6,
-                       limit: Optional[int] = None) -> Dict[str, Any]:
-    """LLM-generate and cache PM Decision Summaries for RFEs that have a
-    description but no cached summary. progress(done, total) is optional."""
-    ensure_tables(db_path)
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return {"generated": 0, "skipped": 0,
-                "error": "ANTHROPIC_API_KEY is not set — PM summaries require an LLM."}
-
-    records, _ = load_rfes(db_path)
-    pending = [r for r in records
-               if len(r["description"]) > 20 and not r["pm_summary"]]
-    if limit:
-        pending = pending[:limit]
-    total = len(pending)
-    if total == 0:
-        return {"generated": 0, "skipped": 0, "total": 0}
-
-    import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
-
-    generated, failed = 0, 0
-    for start in range(0, total, batch_size):
-        batch = pending[start:start + batch_size]
-        payload = "\n\n".join(
-            f"RFE {r['case_number']}\n"
-            f"Subject: {r['subject']}\n"
-            f"Account: {r['account_name']} (ARR ${r['arr']:,.0f}) | "
-            f"Severity: {r['severity']} | Status: {r['status']}\n"
-            f"Raw description (source material only — do NOT copy):\n{r['description'][:1500]}"
-            for r in batch
-        )
-        try:
-            msg = client.messages.create(
-                model=SUMMARY_MODEL,
-                max_tokens=4000,
-                system=[{"type": "text", "text": SUMMARY_SYSTEM,
-                         "cache_control": {"type": "ephemeral"}}],
-                tools=[SUMMARY_TOOL],
-                tool_choice={"type": "tool", "name": "record_summaries"},
-                messages=[{"role": "user", "content":
-                           f"Write a PM Decision Summary for each of these "
-                           f"{len(batch)} RFEs:\n\n{payload}"}],
-            )
-            items = []
-            for block in msg.content:
-                if getattr(block, "type", "") == "tool_use":
-                    items = block.input.get("summaries", []) or []
-                    break
-            by_case = {str(it.get("case_number", "")).strip(): (it.get("summary") or "").strip()
-                       for it in items}
-            conn = sqlite3.connect(db_path)
-            try:
-                for r in batch:
-                    text = by_case.get(r["case_number"], "")
-                    # Guard the skill's absolute rules at the storage boundary:
-                    # reject anything truncated or lifted from the description.
-                    if (not text or text.endswith("...") or text.endswith("…")
-                            or text[:60].lower() in r["description"].lower()):
-                        failed += 1
-                        continue
-                    conn.execute(
-                        "INSERT OR REPLACE INTO pm_summaries "
-                        "(case_number, summary, model, generated_at) VALUES (?,?,?,?)",
-                        (r["case_number"], text, SUMMARY_MODEL,
-                         datetime.utcnow().isoformat()),
-                    )
-                    generated += 1
-                conn.commit()
-            finally:
-                conn.close()
-        except Exception as exc:  # keep going; report at the end
-            failed += len(batch)
-            if progress:
-                progress(min(start + len(batch), total), total, str(exc)[:160])
-            continue
-        if progress:
-            progress(min(start + len(batch), total), total, "")
-
-    return {"generated": generated, "skipped": failed, "total": total}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -709,14 +578,15 @@ def fmt_arr(v: float) -> str:
 
 
 def _pm_summary_html(rfe: Dict[str, Any]) -> str:
-    """Render the PM Decision Summary. NEVER falls back to raw description."""
+    """Render the PM Decision Summary. NEVER falls back to raw description.
+
+    Summaries are written up-front by `ensure_summaries`, so this is normally
+    just a read. If one is somehow missing it is written here rather than
+    showing the PM a placeholder — the report is never published incomplete.
+    """
     text = (rfe.get("pm_summary") or "").strip()
     if not text:
-        if len(rfe["description"]) > 20:
-            text = ("PM summary not generated yet — click "
-                    "“Generate PM summaries” on the Weekly Analysis tab.")
-        else:
-            text = NO_DESC_SUMMARY
+        text = pm_summary.write_summary(rfe)
     return (f'<div class="rfe-pm-summary"><div class="rfe-pm-label">PM Decision Summary</div>'
             f'{_esc(text)}</div>')
 
@@ -953,6 +823,12 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
         r["_trend"] = trend_of(r["_days"])
         r["_recent"] = r["_days"] <= 14
         r["_section"] = classify_section(r["sf_domain"], r["subject"], r["description"])
+
+    # PM Decision Summaries are written here, as part of the build — a report is
+    # never handed over with them missing (skill Step 4: write every summary
+    # BEFORE generating HTML).
+    _tick(f"Writing PM decision summaries for {len(records)} RFEs…", 28)
+    pm_summary.ensure_summaries(db_path, records)
 
     by_section: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for r in records:

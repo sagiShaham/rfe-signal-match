@@ -2,7 +2,7 @@
 
 A FastAPI + vanilla JS tool for Cynet PMs to instantly identify which customer RFEs (feature requests) have already been delivered, are planned in the current PI, or are coming up — so no matched request ever gets missed in a customer conversation.
 
-**Current version: v2.4 — Report workspaces** — Weekly Analysis and PI Report each take your own CSV/Excel upload and build reports that are yours alone, restructured navigation, and a Signal Match banner making the shared dataset explicit
+**Current version: v2.5 — Automatic PM decision summaries** — Weekly Analysis and PI Report each take your own CSV/Excel upload and build reports that are yours alone, restructured navigation, and a Signal Match banner making the shared dataset explicit
 
 ---
 
@@ -258,7 +258,8 @@ rfe-signal-match/
 | v2.1 | PI Planning Report tab (18 domain tabs, exec dashboard, Plotly charts, timeframe filter). Outlook email integration: editable To/CC, in-drawer Send via Office 365 SMTP, Outlook draft fallback, Graph API path (IT-gated). Live Salesforce pull (SOQL, no CSV export). |
 | v2.2 — UI makeover | Decluttered Signal Match: one status color language (pill), monochrome signal-bar match strength (Strong/Likely/Weak) replacing colored 0-1 chips, raw scores moved to hover/expand, 4 clean summary tiles, collapsed toolbar with a Filters popover, progressive-disclosure rows. Tabs reordered — lands on Signal Match; Scoring Config moved last under "Advanced". Plus: internal test-email — submit controlled `@cynet.com`-only `[TEST]` batches to the production RFE Mail Broker, open its Entra review portal, and monitor status (server-side keys, no customer sending). |
 | v2.3 — Weekly Analysis + customer email | New Weekly Analysis tab: a native build of the Cynet weekly RFE report for deciding which state to assign each RFE — 10 domain sections plus Executive, cluster-based grouping covering 100% of a domain's RFEs, priority scoring, NEW/GROWING/STABLE trends, Plotly charts, and persisted state decisions. Email: the `@cynet.com` recipient restriction is lifted (any domain, including real customers) with subjects used verbatim — the broker's Entra-gated review-and-approve step remains the guardrail. Security: the unreviewed direct-send path is gone — the "Send Email" button and the `/api/send-email-smtp` and `/api/send-email-graph` endpoints were removed, so the Mail Broker is the only way an email can leave the platform. |
-| **v2.4 — Report workspaces** | **Weekly Analysis and PI Report become per-PM workspaces: upload your own CSV or Excel file and get a report built from exactly that set, saved in your own browser, with a New report action always available and live build progress. Uploaded data is deliberately kept out of `run_meta`, so it can never become "the latest run" and change what Signal Match shows for everyone. Uploads accept `.csv`, `.xlsx`, `.xlsm` and `.xls`, plus the HTML-table, XML-Spreadsheet and tab-separated files that tools commonly emit with an `.xls` extension — the format is detected from the file's bytes, not its name. Navigation restructured: Signal Match with Data Sources beneath it, an *Other tools* section for Weekly Analysis and PI Report (both Beta), and *Advanced* for Scoring Config. Signal Match gains a banner naming the dump it is showing and stating that uploading replaces it for every PM.** |
+| **v2.5 — Automatic PM decision summaries** | **Every RFE in the Weekly Analysis and PI reports now gets its PM Decision Summary written while the report builds — no button, no `ANTHROPIC_API_KEY`, nothing left saying "not generated yet". Each summary states the gap, the operational consequence and the routing signal, drawn from the subject, the ARR and severity, facts mined from the description, and the sibling cases around it; it never reuses the description's wording, never truncates, and falls back only to the mandated TAM flag when there is no description at all. The PI report's *PM Summary* column, which had been showing raw Salesforce descriptions, uses the same writer. Reports open in their own browser tab instead of an iframe inside the console.** |
+| v2.4 — Report workspaces | **Weekly Analysis and PI Report become per-PM workspaces: upload your own CSV or Excel file and get a report built from exactly that set, saved in your own browser, with a New report action always available and live build progress. Uploaded data is deliberately kept out of `run_meta`, so it can never become "the latest run" and change what Signal Match shows for everyone. Uploads accept `.csv`, `.xlsx`, `.xlsm` and `.xls`, plus the HTML-table, XML-Spreadsheet and tab-separated files that tools commonly emit with an `.xls` extension — the format is detected from the file's bytes, not its name. Navigation restructured: Signal Match with Data Sources beneath it, an *Other tools* section for Weekly Analysis and PI Report (both Beta), and *Advanced* for Scoring Config. Signal Match gains a banner naming the dump it is showing and stating that uploading replaces it for every PM.** |
 
 ---
 
@@ -271,7 +272,7 @@ A portfolio-level strategic demand report generated natively from the RFE data i
 - Per-domain: Top 5 Epics, sortable request tables, ARR/customer/momentum charts, volume trend
 - Global timeframe filter (12 / 6 / 3 months / All Time) that recomputes all charts and epics client-side
 - Light-mode Plotly charts, copy-to-clipboard case numbers, full untruncated PM summaries
-- Served at `GET /api/pi-report` (self-contained HTML), embedded in the platform via iframe
+- Served at `GET /api/pi-report` (self-contained HTML), opened in its own browser tab
 - Generator: [`scoring/pi_report_generator.py`](scoring/pi_report_generator.py)
 
 ### ✉️ Outlook / email integration
@@ -321,8 +322,8 @@ one question: **which state should each RFE be assigned?** (Add to Backlog ·
 Out of Scope · Needs Info · Deferred).
 
 Generated directly from the SQLite DB — no XLS upload. Served at
-`GET /api/weekly-report` as a self-contained light-mode HTML document and embedded
-in the platform via an iframe. Generator:
+`GET /api/weekly-report` as a self-contained light-mode HTML document, which opens
+in **its own browser tab** rather than inside the console. Generator:
 [`scoring/weekly_report_generator.py`](scoring/weekly_report_generator.py).
 
 ### Structure
@@ -349,21 +350,41 @@ ranked by combined priority score, with a `READ FIRST` badge on rank #1.
 Priority score per RFE: `(ARR / 50,000) × 2 + severity_weight × 3 + recency × 2`.
 Trend badge: `NEW` ≤ 7 days, `GROWING` 8–14 days, `STABLE` older.
 
-### PM Decision Summaries (requires an LLM)
+### PM Decision Summaries (written automatically, no API key)
 
-Every RFE card carries a 2–4 sentence PM Decision Summary answering what is broken,
-the operational consequence, and a routing signal (`⚠️ bug/defect — route to
-engineering`, `Deal blocker`, `⚠️ Regression`, …).
+Every RFE card carries a PM Decision Summary answering the three questions the
+skill demands: what is missing or broken today, the operational consequence, and
+the routing signal (`⚠️ This is a bug/defect, not a feature request — route to
+engineering`, `⚠️ Regression`, `Deal blocker for enterprise prospect`,
+`Cluster with #… — route as single engineering task`, …).
 
-These are **LLM-generated** (`claude-opus-5`) and cached in the `pm_summaries` table.
-Click **🧠 Generate PM summaries** on the tab; progress is shown live and the report
-re-renders when done. Requires `ANTHROPIC_API_KEY` in `.env`.
+They are written **during report generation** by
+[`scoring/pm_summary.py`](scoring/pm_summary.py) — there is no button to press and
+no `ANTHROPIC_API_KEY` involved. A report is never handed to a PM with summaries
+missing.
 
-> **A raw Salesforce description is never used as a summary.** When a description is
-> missing, the report shows the mandated flag: *"⚠️ No description provided — follow
-> up with TAM before routing."* When a description exists but no summary has been
-> generated yet, the card says so explicitly rather than pasting the description.
-> This is enforced both at render time and at the storage boundary.
+Each summary is derived from the inputs a PM would use:
+
+| Input | What it contributes |
+|---|---|
+| **Subject** | the surface being asked for, and which kind of gap it is (export, API, RBAC, coverage, alerting, …) |
+| **Description** | mined for *facts* — defect and regression language, compliance exposure, competitor POCs, named platforms and vendors, scale numbers — never for prose |
+| **ARR + severity + age** | what the request is worth and how long it has waited |
+| **The rest of the dataset** | sibling cases from the same account, and cases asking for the same thing, which become cluster routing signals |
+
+Summaries are deterministic — the same RFE always reads the same way — and are
+cached in the `pm_summaries` table keyed by a hash of their source material, so a
+changed description rewrites the summary while a hand-written one is left alone.
+
+> **A raw Salesforce description is never used as a summary.** This is the skill's
+> absolute rule and it is enforced in code: nothing is written that shares an
+> 8-word run with the description, nothing ends in `...`, and the *only* fallback —
+> used when a description is empty — is the mandated flag *"⚠️ No description
+> provided — follow up with TAM before routing."* Descriptions missing from one run
+> are backfilled from other runs of the same case before any of this is decided.
+
+The same writer feeds the PI Report's **PM Summary** column, which previously
+showed the raw description.
 
 ### Assigning state
 

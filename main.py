@@ -2305,8 +2305,9 @@ async def api_report_delete(kind: str, report_id: str):
 
 # ─── Weekly Analysis (RFE state-assignment report) ────────────────────────────
 # Implements the Cynet weekly/bi-weekly report skill natively from the DB.
-# PM Decision Summaries are LLM-generated and cached; a raw Salesforce
-# description is never used as a summary (skill rule).
+# PM Decision Summaries are written during report generation (scoring/
+# pm_summary.py) — no key, no button. A raw Salesforce description is
+# never used as a summary (skill rule).
 
 @app.get("/api/weekly-report", response_class=HTMLResponse)
 async def weekly_report():
@@ -2339,42 +2340,6 @@ async def weekly_report_decision(req: WeeklyDecisionRequest):
     save_decision(DB_PATH, case, decision,
                   note=(req.note or ""), decided_by=(req.decided_by or ""))
     return {"saved": True, "case_number": case, "decision": decision}
-
-@app.post("/api/weekly-report/summaries")
-async def weekly_report_summaries(background: BackgroundTasks):
-    """Generate the missing PM Decision Summaries via the LLM (background job)."""
-    from scoring.weekly_report_generator import generate_summaries, summary_status
-    if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-        raise HTTPException(501,
-            "PM Decision Summaries require an LLM. Add ANTHROPIC_API_KEY to .env — "
-            "raw Salesforce descriptions are never used as summaries.")
-    st = summary_status(DB_PATH)
-    if st["pending"] == 0:
-        return {"job_id": None, "pending": 0,
-                "message": "All eligible RFEs already have a PM summary."}
-
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "running", "stage": "summaries",
-                    "done": 0, "total": st["pending"], "message": "Starting…"}
-
-    def _run():
-        def _progress(done, total, err):
-            jobs[job_id].update({
-                "done": done, "total": total,
-                "message": (f"Generated {done}/{total}" + (f" · {err}" if err else "")),
-            })
-        try:
-            result = generate_summaries(DB_PATH, progress=_progress)
-            jobs[job_id].update({
-                "status": "complete", "result": result,
-                "message": f"Generated {result.get('generated', 0)} summaries"
-                           + (f", {result['skipped']} skipped" if result.get("skipped") else ""),
-            })
-        except Exception as e:
-            jobs[job_id].update({"status": "error", "message": str(e)[:300]})
-
-    background.add_task(_run)
-    return {"job_id": job_id, "pending": st["pending"]}
 
 @app.get("/api/config")
 async def api_get_config():

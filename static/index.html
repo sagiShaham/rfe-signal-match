@@ -1345,7 +1345,7 @@ function renderWorkspace(kind) {
         : '<span class="ws-badge gen"><span class="spinner" style="width:9px;height:9px;border-width:2px;border-top-color:currentColor;border-color:rgba(0,0,0,.15)"></span> ' +
             Math.max(0, Math.min(100, r.pct || 0)) + '%</span>';
     var open = r.status === 'ready'
-      ? '<button class="btn btn-primary btn-sm" onclick="wsOpen(\'' + kind + '\',\'' + r.id + '\')">Open</button>'
+      ? '<button class="btn btn-primary btn-sm" onclick="wsOpen(\'' + kind + '\',\'' + r.id + '\')">Open ↗</button>'
       : '';
     // While building, the row shows the actual stage and a progress bar rather
     // than an unexplained spinner.
@@ -1371,10 +1371,8 @@ function renderWorkspace(kind) {
       '<button class="btn btn-primary btn-sm" onclick="wsPick(\'' + kind + '\')">＋ New report</button>' +
       '<input type="file" accept=".csv,.xlsx,.xlsm,.xls" id="ws-file-' + kind + '" style="display:none" ' +
         'onchange="wsUpload(\'' + kind + '\', this)">' +
-      (kind === 'weekly'
-        ? '<button class="btn btn-ghost btn-sm" id="btn-weekly-summaries" onclick="generateWeeklySummaries()">🧠 Generate PM summaries</button>'
-        : '') +
-      '<span class="ws-hint">Upload a CSV or Excel file of RFEs — same columns as the Data Sources import.</span>' +
+      '<span class="ws-hint">Upload a CSV or Excel file of RFEs — same columns as the Data Sources import. ' +
+        'PM decision summaries are written while the report builds.</span>' +
     '</div>' +
     (list.length
       ? '<div class="ws-list"><div class="ws-list-label">My reports (saved in this browser)</div>' + rows + '</div>'
@@ -1383,20 +1381,8 @@ function renderWorkspace(kind) {
           '<p>' + esc(cfg.blurb) + '<br>Upload a CSV of RFEs to build your first report.</p>' +
           '<button class="btn btn-primary" onclick="wsPick(\'' + kind + '\')">＋ New report</button>' +
         '</div>') +
-    (kind === 'weekly'
-      ? '<div id="weekly-summary-progress" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin:12px 0;box-shadow:var(--shadow)">' +
-          '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px">' +
-          '<span id="weekly-sum-label" style="color:var(--text-muted)">Generating PM summaries…</span>' +
-          '<span id="weekly-sum-pct" style="color:var(--accent)">0%</span></div>' +
-          '<div class="progress-wrap"><div class="progress-fill" id="weekly-sum-bar" style="width:0%"></div></div></div>'
-      : '') +
-    '<iframe id="ws-frame-' + kind + '" src="" style="width:100%;height:85vh;border:none;' +
-      'border-radius:8px;display:' + (_wsOpen[kind] ? 'block' : 'none') + '"></iframe>';
+    '';
 
-  if (_wsOpen[kind]) {
-    var f = document.getElementById('ws-frame-' + kind);
-    if (f && !f.src) f.src = '/api/reports/' + kind + '/' + _wsOpen[kind];
-  }
   // Resume polling for anything still building (e.g. after a page refresh).
   list.forEach(function(r) { if (r.status === 'generating') _wsPollOne(kind, r.id); });
 }
@@ -1486,8 +1472,7 @@ function _wsPollOne(kind, id) {
       _wsUpdate(kind, id, {status: st.status, rfe_count: st.rfe_count,
                            stage: st.stage, pct: st.pct, error: st.error});
       if (st.status === 'ready') {
-        toast('“' + st.label + '” is ready', 'success');
-        if (!_wsOpen[kind]) { _wsOpen[kind] = id; }
+        toast('“' + st.label + '” is ready — Open it in a new tab', 'success');
       } else {
         toast('Report failed: ' + (st.error || 'unknown error'), 'error');
       }
@@ -1496,11 +1481,18 @@ function _wsPollOne(kind, id) {
   }, 3000);
 }
 
+// Reports open in their own browser tab rather than inside the console: they
+// are full-page documents with their own sidebar, and an iframe left the PM
+// looking at navigation inside navigation.
 function wsOpen(kind, id) {
-  _wsOpen[kind] = id;
+  var win = window.open('/api/reports/' + kind + '/' + id + '?t=' + Date.now(),
+                        '_blank', 'noopener');
+  if (!win) {
+    toast('Your browser blocked the new tab — allow pop-ups for this site', 'error');
+    return;
+  }
+  _wsOpen[kind] = id;          // marks the row you last opened
   renderWorkspace(kind);
-  var f = document.getElementById('ws-frame-' + kind);
-  if (f) { f.src = '/api/reports/' + kind + '/' + id + '?t=' + Date.now(); f.style.display = 'block'; }
 }
 
 async function wsDelete(kind, id) {
@@ -1508,72 +1500,9 @@ async function wsDelete(kind, id) {
   if (!confirm('Delete “' + (rec ? rec.label : id) + '”? This removes the report and its uploaded RFEs.')) return;
   try { await fetch('/api/reports/' + kind + '/' + id, {method: 'DELETE'}); } catch (e) {}
   _wsSave(kind, _wsList(kind).filter(function(r) { return r.id !== id; }));
-  if (_wsOpen[kind] === id) {
-    _wsOpen[kind] = null;
-    var f = document.getElementById('ws-frame-' + kind);
-    if (f) { f.src = ''; f.style.display = 'none'; }
-  }
+  if (_wsOpen[kind] === id) { _wsOpen[kind] = null; }
   renderWorkspace(kind);
   toast('Report deleted', 'info');
-}
-
-// Kept for the PM-summaries action, which acts on the shared summary cache.
-var _weeklySumTimer = null;
-
-async function generateWeeklySummaries() {
-  var btn = document.getElementById('btn-weekly-summaries');
-  var panel = document.getElementById('weekly-summary-progress');
-  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
-  try {
-    var res = await fetch('/api/weekly-report/summaries', {method: 'POST'});
-    var data = await res.json().catch(function(){ return {}; });
-    if (res.status === 501) {
-      toast('PM summaries need ANTHROPIC_API_KEY on the server', 'error');
-      if (btn) { btn.disabled = true; btn.textContent = '🧠 Generate PM summaries'; }
-      return;
-    }
-    if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
-    if (!data.job_id) {
-      toast(data.message || 'Nothing to generate', 'info');
-      if (btn) { btn.disabled = false; btn.textContent = '🧠 Generate PM summaries'; }
-      return;
-    }
-    if (panel) panel.style.display = 'block';
-    _pollWeeklySummaries(data.job_id);
-  } catch (e) {
-    toast('Summary generation failed: ' + e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = '🧠 Generate PM summaries'; }
-  }
-}
-
-function _pollWeeklySummaries(jobId) {
-  clearInterval(_weeklySumTimer);
-  _weeklySumTimer = setInterval(async function() {
-    try {
-      var st = await (await fetch('/api/status/' + jobId)).json();
-      var pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
-      var bar = document.getElementById('weekly-sum-bar');
-      var lab = document.getElementById('weekly-sum-label');
-      var pc  = document.getElementById('weekly-sum-pct');
-      if (bar) bar.style.width = pct + '%';
-      if (pc)  pc.textContent = pct + '%';
-      if (lab) lab.textContent = st.message || 'Generating PM summaries…';
-      if (st.status === 'complete' || st.status === 'error') {
-        clearInterval(_weeklySumTimer);
-        var btn = document.getElementById('btn-weekly-summaries');
-        if (btn) { btn.disabled = false; btn.textContent = '🧠 Generate PM summaries'; }
-        setTimeout(function() {
-          var panel = document.getElementById('weekly-summary-progress');
-          if (panel) panel.style.display = 'none';
-        }, 2500);
-        if (st.status === 'error') toast('Summaries failed: ' + st.message, 'error');
-        else {
-          toast(st.message || 'PM summaries generated', 'success');
-          if (_wsOpen.weekly) wsOpen('weekly', _wsOpen.weekly);   // re-render with summaries
-        }
-      }
-    } catch (e) { /* transient — keep polling */ }
-  }, 2000);
 }
 
 // ─── CSV Import ───────────────────────────────────────────────────────────────

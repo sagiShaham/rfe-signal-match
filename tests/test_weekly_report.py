@@ -160,7 +160,12 @@ def test_missing_description_uses_mandated_tam_fallback():
 
 
 def test_raw_description_is_never_used_as_summary():
-    """Absolute rule: never paste raw description text into the summary."""
+    """Absolute rule: never paste raw description text into the summary.
+
+    A summary is written during report generation, so the renderer should never
+    see an empty one — and if it somehow does, it writes one rather than showing
+    a placeholder the PM cannot act on.
+    """
     raw = ("Customer explains at length that the console does not let them "
            "export the user list to CSV which blocks their monthly audit.")
     rfe = _mk("1", "Export user list")
@@ -168,7 +173,9 @@ def test_raw_description_is_never_used_as_summary():
     rfe["pm_summary"] = ""
     html = wr._pm_summary_html(rfe)
     assert raw[:40] not in html, "raw description leaked into the PM summary"
-    assert "not generated yet" in html
+    assert "not generated yet" not in html
+    assert "Generate PM summaries" not in html
+    assert "export" in html.lower()
 
 
 def test_cached_summary_is_rendered_when_present():

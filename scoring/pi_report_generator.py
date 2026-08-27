@@ -71,6 +71,9 @@ SUBJECT_PREFIX_RE = re.compile(
 )
 
 
+from scoring import pm_summary
+
+
 def classify_domain(sf_domain: str, subject: str, description: str) -> str:
     """Classify an RFE into a domain."""
     if sf_domain:
@@ -279,6 +282,26 @@ def build_domain_data(records: List[Dict]) -> Dict[str, List[Dict]]:
     return {d: cluster_domain(rfes) for d, rfes in by_domain.items()}
 
 
+# PI domain → the section the summary writer uses to pick area and actor.
+PM_SECTION_OF = {
+    "EPP": "epp", "Endpoint Management": "epp",
+    "Email Security": "email", "SIEM": "siem", "Identity": "identity",
+    "CSPM": "cspm", "Reporting": "reporting", "AI Initiatives": "ai",
+    "Automations": "automations", "Playbooks": "automations",
+    "Remediation": "automations", "PSA/RMM": "automations", "API": "automations",
+    "Platform": "platform", "User Management": "platform",
+    "Alert UI": "platform", "Other": "platform",
+}
+
+
+def _pm(record: Dict) -> str:
+    """The record's PM Decision Summary — written up-front by
+    `pm_summary.ensure_summaries`, so this is normally just a read. It is
+    never the raw description: the skill forbids that outright."""
+    text = (record.get("pm_summary") or "").strip()
+    return text or pm_summary.write_summary(record)
+
+
 def _fmt_arr_py(v: float) -> str:
     """Format ARR for Python-rendered HTML."""
     if v >= 1_000_000:
@@ -313,7 +336,7 @@ def _render_cases_table(cases: List[Dict]) -> str:
   <td>{_fmt_arr_py(float(c.get('account_arr') or 0))}</td>
   <td>{_esc(str(c.get('created_date','') or '')[:10])}</td>
   <td class="{sev_class}">{_esc(c.get('severity',''))}</td>
-  <td class="pm-summary">{_esc(c.get('description',''))}</td>
+  <td class="pm-summary">{_esc(_pm(c))}</td>
 </tr>"""
     return f"""<table class="sub-table"><thead><tr>
   <th>Case #</th><th>Subject</th><th>Account</th><th>ARR</th><th>Opened</th><th>Severity</th><th style="min-width:200px">PM Summary</th>
@@ -342,6 +365,15 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
 <h2>No RFE data found</h2>
 <p>Upload a CSV of RFEs on the PI Report tab to generate a report.</p>
 </body></html>"""
+
+    # PM Decision Summaries are written here, as part of the build — the
+    # report is never handed over with a raw description standing in for one.
+    _tick(f"Writing PM decision summaries for {len(records)} RFEs…", 25)
+    pm_summary.backfill_descriptions(db_path, records, run_id)
+    for r in records:
+        r["section"] = PM_SECTION_OF.get(
+            classify_domain(r["domain"], r["subject"], r["description"]), "platform")
+    pm_summary.ensure_summaries(db_path, records)
 
     # Classify domains and build clusters
     _tick(f"Clustering {len(records)} RFEs by domain…", 45)
@@ -394,6 +426,7 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
             "account":     r.get("account_name", ""),
             "subject":     r.get("subject", ""),
             "description": r.get("description", ""),
+            "pm_summary":  _pm(r),
             "arr":         float(r.get("account_arr") or 0),
             "severity":    r.get("severity", ""),
             "opened":      r.get("created_date", ""),
@@ -420,6 +453,7 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
                 "account":     case.get("account_name", ""),
                 "subject":     case.get("subject", ""),
                 "description": case.get("description", ""),
+                "pm_summary":  _pm(case),
                 "arr":         float(case.get("account_arr") or 0),
                 "severity":    case.get("severity", ""),
                 "opened":      case.get("created_date", ""),
@@ -542,7 +576,7 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
                 f'<td style="color:var(--green);font-weight:600;white-space:nowrap">{_fmt_arr_py(float(c.get("account_arr") or 0))}</td>'
                 f'<td style="white-space:nowrap">{_esc(str(c.get("created_date","") or "")[:10])}</td>'
                 f'<td><span class="{sev_cls}">{_esc(sev)}</span></td>'
-                f'<td class="pm-summary-cell">{_esc(c.get("description","")) or "<em>No description available</em>"}</td>'
+                f'<td class="pm-summary-cell">{_esc(_pm(c))}</td>'
                 f'</tr>\n'
             )
         return rows
@@ -962,7 +996,7 @@ function toggleGlobalEpic(i){{
       <td>${{c.account||''}}</td>
       <td style="color:var(--green);font-weight:600;white-space:nowrap">${{fmtArr(c.arr||0)}}</td>
       <td style="white-space:nowrap">${{c.opened||''}}</td>
-      <td class="pm-summary-cell">${{c.description||'<em style=\\'color:var(--muted)\\'>No description available</em>'}}</td>
+      <td class="pm-summary-cell">${{c.pm_summary||c.description||''}}</td>
     </tr>`;
   }});
   container.innerHTML=`<div class="expand-content" style="border-radius:8px;border:1px solid #bfdbfe;background:#f8fbff;margin-top:8px">
@@ -1089,7 +1123,7 @@ function renderExecCharts(){{
         <td>${{c.subject.slice(0,70)}}</td><td>${{c.account}}</td>
         <td style="color:var(--green);font-weight:600">${{fmtArr(c.arr)}}</td>
         <td>${{c.opened}}</td>
-        <td class="pm-summary-cell">${{c.description||'<em>No description</em>'}}</td>
+        <td class="pm-summary-cell">${{c.pm_summary||c.description||''}}</td>
       </tr>`;
     }});
     document.getElementById('trend-detail-container').innerHTML=`<div class="expand-content" style="border-radius:8px;border:1px solid #bfdbfe;background:#f8fbff">
