@@ -130,6 +130,14 @@ def migrate_db():
         # v2.4: live progress for report generation
         "ALTER TABLE report_datasets ADD COLUMN stage TEXT",
         "ALTER TABLE report_datasets ADD COLUMN pct INTEGER DEFAULT 0",
+        # v2.6 (PI Planning v2): fields the Salesforce export already carries but
+        # the platform threw away. Business Impact is the only place a human
+        # states a consequence, so it is a first-class ranking signal now; the
+        # currency lets the report disclose that a figure was not converted.
+        "ALTER TABLE rfe_pulls ADD COLUMN business_impact INTEGER DEFAULT 0",
+        "ALTER TABLE rfe_pulls ADD COLUMN business_impact_reason TEXT",
+        "ALTER TABLE rfe_pulls ADD COLUMN case_owner TEXT",
+        "ALTER TABLE rfe_pulls ADD COLUMN arr_currency TEXT",
         # v2 scoring: per-RFE match results table
         """CREATE TABLE IF NOT EXISTS matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,6 +282,18 @@ SF_COLUMN_ALIASES = {
     "sub_domain":   ["sub-domain","sub domain","subdomain","sub_domain__c"],
     "severity":     ["severity","case severity","priority"],
     "created_date": ["date/time opened","created date","createddate","opened date","open date","created"],
+    # PI Planning v2 signals. `business_impact` is a Salesforce checkbox exported
+    # as 1/0 and `business_impact_reason` the free-text justification beside it —
+    # together the only place in the export where a person states a business
+    # consequence, which makes them the strongest ranking signal available.
+    # Exact-alias matching runs before substring matching in detect_columns, so
+    # "Business Impact" cannot be captured by the "Business Impact Reason" column.
+    "business_impact":        ["business impact","businessimpact","business impact?","has business impact"],
+    "business_impact_reason": ["business impact reason","business impact description",
+                               "businessimpactreason","impact reason"],
+    "case_owner":   ["case owner","owner","assigned to","case owner name"],
+    "arr_currency": ["account's arr currency","accounts arr currency","arr currency",
+                     "currency isocode","currency"],
 }
 
 def detect_columns(headers: List[str]) -> Dict[str, Optional[str]]:
@@ -296,6 +316,37 @@ def parse_arr(val: str) -> Optional[float]:
     cleaned = re.sub(r"[^\d.]", "", str(val))
     try: return float(cleaned)
     except ValueError: return None
+
+def parse_flag(val) -> int:
+    """A Salesforce checkbox as stored by an export → 1 or 0.
+
+    The XLS export writes '1'/'0', a CSV re-save can write 'true'/'Yes', and a
+    hand-edited sheet 'x'. Only recognised positives count: an unfamiliar value
+    must never silently promote an RFE up the PI Planning ranking.
+    """
+    if val is None or val == "": return 0
+    if isinstance(val, bool): return int(val)
+    if isinstance(val, (int, float)): return 1 if val else 0
+    return 1 if str(val).strip().lower() in ("1", "true", "yes", "y", "x", "checked") else 0
+
+def insert_rfe_pull(cur, run_id: str, g, pulled_at: str) -> None:
+    """Insert one uploaded RFE row.
+
+    `g(field)` reads a mapped column from the source row. Shared by the Signal
+    Match import and the per-PM report upload so both paths capture the same
+    fields — when only one of them stored Business Impact, a report built from
+    the shared run silently ranked as if no customer had ever asserted one.
+    """
+    cur.execute(
+        "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
+        "account_arr,status,domain,sub_domain,severity,created_date,pulled_at,"
+        "business_impact,business_impact_reason,case_owner,arr_currency) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (run_id, g("case_number"), g("subject"), g("description"), g("account_name"),
+         parse_arr(g("account_arr")), g("status"), g("domain"), g("sub_domain"),
+         g("severity"), g("created_date"), pulled_at,
+         parse_flag(g("business_impact")), g("business_impact_reason"),
+         g("case_owner"), g("arr_currency")))
 
 # ─── Text similarity ──────────────────────────────────────────────────────────
 
@@ -955,13 +1006,7 @@ async def import_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         def g(field):
             col = col_map.get(field)
             return rec.get(col, "").strip() if col else ""
-        cur.execute(
-            "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,account_arr,"
-            "status,domain,sub_domain,severity,created_date,pulled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, g("case_number"), g("subject"), g("description"), g("account_name"),
-             parse_arr(g("account_arr")), g("status"), g("domain"), g("sub_domain"),
-             g("severity"), g("created_date"), pulled_at),
-        )
+        insert_rfe_pull(cur, run_id, g, pulled_at)
     cur.execute("INSERT OR REPLACE INTO run_meta (run_id,started_at,rfe_count,status,source) VALUES (?,?,?,'imported','csv')",
                 (run_id, pulled_at, len(records)))
     conn.commit()
@@ -2237,13 +2282,7 @@ async def api_report_upload(kind: str, background: BackgroundTasks,
         def g(field):
             col = col_map.get(field)
             return (rec.get(col) or "").strip() if col else ""
-        cur.execute(
-            "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
-            "account_arr,status,domain,sub_domain,severity,created_date,pulled_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, g("case_number"), g("subject"), g("description"), g("account_name"),
-             parse_arr(g("account_arr")), g("status"), g("domain"), g("sub_domain"),
-             g("severity"), g("created_date"), now))
+        insert_rfe_pull(cur, run_id, g, now)
 
     # Same domain inference the shared import does, so grouping behaves alike.
     for br in cur.execute("SELECT id, subject, description FROM rfe_pulls "
@@ -2404,6 +2443,11 @@ def _sf_pull_sync(run_id, days_back, job_id, sf_user, sf_pass, sf_token, sf_doma
     conn = get_db(); cur = conn.cursor()
     for rec in records:
         acct = rec.get("Account") or {}
+        # NOTE: this SOQL path does not yet pull Business Impact / its reason —
+        # the custom field API names are not confirmed against the org, and
+        # guessing one would raise a Salesforce error for every pull. A PI report
+        # built from a SOQL run therefore scores as if no business impact were
+        # asserted; the file-upload paths above do capture it.
         cur.execute(
             "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,account_arr,"
             "status,domain,sub_domain,severity,created_date,pulled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
