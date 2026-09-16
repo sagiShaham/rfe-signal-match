@@ -169,11 +169,36 @@ body{background:var(--bg);color:var(--text);font-family:"Segoe UI",Arial,sans-se
 .pill.flag{background:#fee2e2;color:#991b1b}
 .pill.age{background:#f1f5f9;color:var(--slate)}
 
-.band{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:#fff;white-space:nowrap}
+/* Decision badges carry a shape as well as a colour, so the four bands stay
+   distinguishable in greyscale, in print, and to a colour-blind reader — and
+   every one of them explains itself on hover. */
+.band{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;
+      padding:2px 9px 2px 7px;border-radius:10px;color:#fff;white-space:nowrap;cursor:help;
+      border:1px solid transparent}
+.band .mark{font-size:9px;line-height:1}
 .band.start_now{background:var(--band-start)}
 .band.plan{background:var(--band-plan)}
-.band.backlog{background:var(--band-keep)}
-.band.drop{background:var(--band-drop);color:#1f2937}
+.band.backlog{background:#eef1f6;color:#3f4a5a;border-color:#cbd3e0}
+.band.drop{background:#fff;color:#6b7280;border-color:#d7dce5;border-style:dashed}
+.band:hover{filter:brightness(1.06)}
+.band.backlog:hover,.band.drop:hover{filter:none;border-color:var(--accent);color:var(--accent-dark)}
+
+/* Key strip: the four bands, spelled out, above the first thing that uses them. */
+.band-key{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px;
+          padding:9px 12px;background:var(--card);border:1px solid var(--border);
+          border-radius:9px;box-shadow:var(--shadow)}
+.band-key .kl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
+              color:var(--muted);margin-right:2px}
+.band-key .item{display:flex;align-items:center;gap:6px;font-size:11px;color:#4b5563}
+.band-key .item .what{color:var(--muted)}
+
+#tip{position:absolute;z-index:900;max-width:330px;background:#111827;color:#f9fafb;
+     font-size:11.5px;line-height:1.55;padding:9px 11px;border-radius:7px;
+     box-shadow:0 6px 20px rgba(17,24,39,.22);pointer-events:none;opacity:0;
+     transition:opacity .12s;display:none}
+#tip.on{opacity:1;display:block}
+#tip b{color:#fff}
+[data-tip]{cursor:help}
 
 .sev{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;white-space:nowrap}
 .sev.critical{background:#7f1d1d;color:#fff}
@@ -217,15 +242,6 @@ table.sub tr:last-child td{border-bottom:none}
 .flagmark{color:var(--red);font-weight:700}
 
 /* ── Interpretation / actions ─────────────────────────────────────────────── */
-.interp{background:var(--sunken);border:1px solid var(--border);border-radius:9px;padding:13px 15px}
-.interp-item{margin-bottom:11px}
-.interp-item:last-child{margin-bottom:0}
-.interp-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
-.interp-item.accent .interp-label{color:var(--accent)}
-.interp-item.green .interp-label{color:var(--green)}
-.interp-item.orange .interp-label{color:var(--orange)}
-.interp-item.muted .interp-label{color:var(--muted)}
-.interp-text{font-size:12px;color:#374151;line-height:1.65}
 .actions{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;padding:13px 15px}
 .action{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start}
 .action:last-child{margin-bottom:0}
@@ -233,6 +249,22 @@ table.sub tr:last-child td{border-bottom:none}
 .action .t{font-size:12px;line-height:1.6;color:#111827}
 
 .chart{width:100%}
+/* Findings, not filler: each row is one observation with the number behind it. */
+.insights{display:grid;gap:10px}
+.insight{display:flex;gap:10px;align-items:flex-start;font-size:12.5px;line-height:1.6;
+         color:#374151;padding:10px 12px;background:var(--sunken);border-radius:8px;
+         border-left:3px solid var(--border)}
+.insight .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:6px}
+.insight.accent{border-left-color:var(--accent)}
+.insight.accent .dot{background:var(--accent)}
+.insight.red{border-left-color:var(--red);background:#fef6f6}
+.insight.red .dot{background:var(--red)}
+.insight.orange{border-left-color:var(--orange);background:#fffbf3}
+.insight.orange .dot{background:var(--orange)}
+.insight.green{border-left-color:var(--green)}
+.insight.green .dot{background:var(--green)}
+.insight.muted .dot{background:var(--faint)}
+.insight strong{color:var(--text);font-weight:650}
 .chart-note{font-size:11px;color:var(--muted);margin-top:6px;text-align:right}
 .empty-state{padding:26px 16px;text-align:center;color:var(--muted);font-size:12px;background:var(--sunken);border:1px dashed #d1d5db;border-radius:9px}
 .dq{font-size:11.5px;color:var(--muted);line-height:1.7}
@@ -275,6 +307,78 @@ const SEV_ORDER = {critical: 4, high: 3, medium: 2, low: 1, '': 0};
 const BAND_COLOR = {start_now: '#1d4ed8', plan: '#7c3aed', backlog: '#64748b', drop: '#94a3b8'};
 const BAND_LABEL = {};
 M.meta.bands.forEach(b => { BAND_LABEL[b.key] = b.label; });
+
+/* The decision bands, with the shape that identifies each one and the sentence
+   it shows on hover. The explanations name the thresholds AND the floors,
+   because "why is this Critical single-customer request in Plan?" is the first
+   question a reader asks of the badge. */
+const BAND_META = {
+  start_now: {mark: '\u25b6', label: 'Start now', action: 'Commit to this PI',
+    tip: 'Score 68 or above. Carried by more than one signal at once \u2014 severity, ARR, ' +
+         'repeat demand across customers, or a business impact the customer stated. ' +
+         'These are the themes to write epics for in this meeting.'},
+  plan: {mark: '\u25c6', label: 'Plan', action: 'Size now, commit next PI',
+    tip: 'Score 54 to 67 \u2014 or lifted here because severity is Critical, or because the ' +
+         'customer wrote down the business consequence. Real signal, not yet enough to ' +
+         'displace the commit list. Size it now so the next PI opens with it understood.'},
+  backlog: {mark: '\u25a0', label: 'Keep in backlog', action: 'Revisit next cycle',
+    tip: 'Score 38 to 53 \u2014 or lifted here because a customer flagged business impact, ' +
+         'because 1M dollars or more of ARR sits behind it, or because a second customer ' +
+         'has asked. Worth keeping and re-reading next cycle; not worth capacity now.'},
+  drop: {mark: '\u25cb', label: 'Drop candidate', action: 'Propose closing with the customer',
+    tip: 'Below 38: one customer, no business-impact flag, limited severity and limited ARR ' +
+         'behind it. A proposal to close with the requesting customer \u2014 not an ' +
+         'instruction, and never applied to anything the floors protect.'}
+};
+
+/** A decision badge: shape, label, and its explanation on hover. */
+function bandBadge(key) {
+  const m = BAND_META[key];
+  if (!m) return '';
+  return '<span class="band ' + key + '" data-tip="<b>' + m.label + ' \u2014 ' + m.action +
+         '</b><br>' + m.tip + '">' +
+         '<span class="mark">' + m.mark + '</span>' + m.label + '</span>';
+}
+
+/** The key strip shown above the first thing on a page that uses the bands. */
+function bandKey() {
+  return '<div class="band-key"><span class="kl">Decision bands</span>' +
+    ['start_now', 'plan', 'backlog', 'drop'].map(k =>
+      '<span class="item">' + bandBadge(k) +
+      '<span class="what">' + BAND_META[k].action + '</span></span>').join('') +
+    '</div>';
+}
+
+/* One floating tooltip, appended to the body, so an explanation is never clipped
+   by a table's horizontal scroll container the way a CSS ::after tooltip is. */
+function initTips() {
+  let el = document.getElementById('tip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'tip';
+    document.body.appendChild(el);
+  }
+  const show = ev => {
+    const host = ev.target.closest && ev.target.closest('[data-tip]');
+    if (!host) return;
+    el.innerHTML = host.getAttribute('data-tip');
+    el.classList.add('on');
+    const r = host.getBoundingClientRect();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let left = r.left + window.scrollX + r.width / 2 - w / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+    let top = r.top + window.scrollY - h - 9;
+    if (top < window.scrollY + 4) top = r.bottom + window.scrollY + 9;   // flip under
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  };
+  const hide = ev => {
+    if (ev.target.closest && ev.target.closest('[data-tip]')) el.classList.remove('on');
+  };
+  document.addEventListener('mouseover', show);
+  document.addEventListener('mouseout', hide);
+  document.addEventListener('click', () => el.classList.remove('on'));
+}
 
 const RECORDS = {};
 M.records.forEach(r => { RECORDS[r.case] = r; });
@@ -462,7 +566,20 @@ function wrapLabel(text, width) {
     else { lines.push(line); line = w; }
   });
   if (line.length) lines.push(line);
-  return {html: lines.map(esc).join('<br>'), lines: Math.max(1, lines.length)};
+  return {html: lines.map(plotlyText).join('<br>'), lines: Math.max(1, lines.length)};
+}
+
+/** Make customer-authored text safe for a Plotly label.
+ *
+ *  Plotly draws SVG text and parses a small HTML subset; it does NOT decode
+ *  entities, so running esc() over a label put a literal `&quot;` on the axis
+ *  ("Critical alerts classified as &quot;high&quot;"). Quotes and ampersands are
+ *  therefore left exactly as the customer typed them, and only the angle
+ *  brackets are neutralised — swapped for look-alike single-character glyphs, so
+ *  "value < 10" keeps its meaning while no tag can be parsed out of a subject. */
+function plotlyText(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/</g, '‹').replace(/>/g, '›');
 }
 
 /** Height for a horizontal category chart, from how many lines its labels need. */
@@ -640,7 +757,7 @@ function caseTable(caseNums, opts) {
       '<td class="mid">' + esc(r.opened || 'not recorded') + '</td>' +
       '<td class="mid"><span class="sev ' + sevClass(sevKey(r)) + '">' + esc(r.severity) + '</span></td>' +
       '<td class="mid"><span class="score-num">' + (s.score !== undefined ? s.score : '') + '</span>' +
-        '<div><span class="band ' + s.band + '">' + esc(BAND_LABEL[s.band] || '') + '</span></div></td>' +
+        '<div>' + bandBadge(s.band) + '</div></td>' +
       '<td class="pm">' + esc(r.pm) + orig +
         (r.bi && r.bi_reason ? '<div style="margin-top:6px;font-size:11px;color:#991b1b">' +
           '<strong>Business impact stated:</strong> ' + esc(r.bi_reason) + '</div>' : '') +
@@ -673,7 +790,7 @@ function themeTable(clusters, idPrefix) {
       '<td><div class="theme-name">' + esc(c.name) + '</div>' +
         '<div class="theme-sub">' + esc(c.domain) + '</div>' + matchNote + '</td>' +
       '<td><div class="score-cell"><span class="score-num">' + c.score + '</span>' +
-        '<span class="band ' + c.band.key + '">' + esc(c.band.label) + '</span></div></td>' +
+        bandBadge(c.band.key) + '</div></td>' +
       '<td class="mid">' + sev + '</td>' +
       '<td class="num">' + fmtArr(c.arr) + '</td>' +
       '<td class="mid">' + c.customers + '</td>' +
@@ -730,7 +847,7 @@ function epicCards(clusters, prefix, showDomain) {
     return '<div class="epic" id="epic-' + key + '" onclick="toggleEpic(\'' + key + '\',\'' + prefix + '\')">' +
       '<div class="rank">#' + (i + 1) +
         (showDomain ? '<span class="dom">' + esc(c.domain) + '</span>' : '') +
-        '<span class="band ' + c.band.key + '">' + esc(c.band.label) + '</span></div>' +
+        bandBadge(c.band.key) + '</div>' +
       '<div class="etitle">' + esc(c.name) + '</div>' +
       '<div class="pills">' +
         '<span class="pill req">' + plural(c.requests, 'request') + '</span>' +
@@ -792,8 +909,8 @@ function drawMatrix(elId, clusters, detailId) {
     },
     customdata: items.map(c => [c.name, c.domain, c.requests, fmtArr(c.arr), c.band.label]),
     hovertemplate: '<b>%{customdata[0]}</b><br>%{customdata[1]}<br>' +
-      'PI Priority %{y} &middot; %{customdata[4]}<br>' +
-      '%{x} customers &middot; %{customdata[2]} requests &middot; %{customdata[3]}<extra></extra>'
+      'PI Priority %{y} · %{customdata[4]}<br>' +
+      '%{x} customers · %{customdata[2]} requests · %{customdata[3]}<extra></extra>'
   }];
   const maxX = Math.max.apply(null, items.map(c => c.customers));
   const lay = layout({
@@ -929,86 +1046,8 @@ function drawMomentum(elId, domains) {
   }), PLOTLY_CFG);
 }
 
-/** Themes ranked inside one domain — bars coloured by the decision band, so the
- *  reader sees where the commit line falls without reading a number. */
-function drawThemeRanking(elId, clusters) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  const items = clusters.slice(0, 14).slice().reverse();
-  setChartNote(elId, items.length, clusters.length, 'themes');
-  if (!items.length) { el.innerHTML = '<div class="empty-state">Nothing to plot.</div>'; return; }
-  const wrapped = items.map(c => wrapLabel(c.name, 34));
-  Plotly.react(el, [{
-    type: 'bar', orientation: 'h',
-    x: items.map(c => c.score),
-    y: wrapped.map(w => w.html),
-    marker: {color: items.map(c => BAND_COLOR[c.band.key])},
-    text: items.map(c => c.band.label),
-    textposition: 'outside', textfont: {size: 10, color: '#6b7280'},
-    cliponaxis: false,
-    customdata: items.map(c => [c.requests, c.customers, fmtArr(c.arr)]),
-    hovertemplate: '<b>%{y}</b><br>PI Priority %{x}<br>%{customdata[0]} requests &middot; ' +
-                   '%{customdata[1]} customers &middot; %{customdata[2]}<extra></extra>'
-  }], layout({
-    height: barHeight(wrapped, 280),
-    margin: {t: 12, r: 120, b: 42, l: 8},
-    xaxis: {title: {text: 'PI Priority', font: {size: 10}}, gridcolor: '#f3f4f6',
-            zeroline: false, range: [0, 100], automargin: true},
-    yaxis: {type: 'category', gridcolor: '#ffffff', zeroline: false, automargin: true,
-            tickfont: {size: 10.5}}
-  }), PLOTLY_CFG);
-}
 
-/** ARR at stake per theme — distinct accounts, so this is exposure, not volume. */
-function drawThemeArr(elId, clusters) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  const items = clusters.slice().sort((a, b) => a.arr - b.arr).slice(-14);
-  setChartNote(elId, items.length, clusters.length, 'themes by ARR');
-  if (!items.length) { el.innerHTML = '<div class="empty-state">Nothing to plot.</div>'; return; }
-  const wrapped = items.map(c => wrapLabel(c.name, 34));
-  Plotly.react(el, [{
-    type: 'bar', orientation: 'h',
-    x: items.map(c => c.arr),
-    y: wrapped.map(w => w.html),
-    marker: {color: '#16a34a', opacity: 0.85},
-    text: items.map(c => fmtArr(c.arr) + ' &middot; ' + plural(c.customers, 'customer')),
-    textposition: 'outside', textfont: {size: 10, color: '#6b7280'},
-    cliponaxis: false,
-    hovertemplate: '<b>%{y}</b><br>%{text}<extra></extra>'
-  }], layout({
-    height: barHeight(wrapped, 280),
-    margin: {t: 12, r: 150, b: 42, l: 8},
-    xaxis: {title: {text: 'ARR at stake (each account counted once)', font: {size: 10}},
-            gridcolor: '#f3f4f6', zeroline: false, automargin: true},
-    yaxis: {type: 'category', gridcolor: '#ffffff', zeroline: false, automargin: true,
-            tickfont: {size: 10.5}}
-  }), PLOTLY_CFG);
-}
 
-/** Requests opened per month. Gap-filled in Python so a quiet month reads as a
- *  zero rather than being skipped and flattering the trend. */
-function drawTrend(elId, monthly) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  if (!monthly || !monthly.length) {
-    el.innerHTML = '<div class="empty-state">No dated requests in this scope.</div>';
-    return;
-  }
-  Plotly.react(el, [{
-    type: 'scatter', mode: 'lines+markers',
-    x: monthly.map(m => m.month), y: monthly.map(m => m.count),
-    fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.09)',
-    line: {color: '#2563eb', width: 2}, marker: {size: 5, color: '#2563eb'},
-    hovertemplate: '%{x}: <b>%{y}</b> opened<extra></extra>'
-  }], layout({
-    height: 280,
-    margin: {t: 12, r: 20, b: 54, l: 46},
-    xaxis: {gridcolor: '#f3f4f6', zeroline: false, tickangle: -35, automargin: true},
-    yaxis: {title: {text: 'Requests opened', font: {size: 10}}, gridcolor: '#f3f4f6',
-            zeroline: false, rangemode: 'tozero', automargin: true}
-  }), PLOTLY_CFG);
-}
 
 /* ── Executive page ─────────────────────────────────────────────────────── */
 
@@ -1068,7 +1107,7 @@ function rankHelp() {
     '<p>Five facts carry a floor, because they need a decision rather than a default. ' +
     '<strong>Critical severity</strong> and <strong>a business impact the customer wrote down</strong> ' +
     'cannot rank below Plan. <strong>A business-impact flag</strong>, <strong>$1M or more of ARR at ' +
-    'stake</strong>, or <strong>three or more customers asking</strong> cannot rank below Keep in backlog ' +
+    'stake</strong>, or <strong>a second customer asking</strong> cannot rank below Keep in backlog ' +
     '&mdash; whether to tell a customer of that size no is an account conversation, not a scoring ' +
     'outcome. Any row lifted this way says so at the end of its "why" line.</p>' +
     '<p>The timeframe selects the scoring window. The severity, business-impact, ARR and repetition ' +
@@ -1102,6 +1141,8 @@ function renderExec() {
   html += kpiTiles();
 
   // The decision queue — the centre of the page.
+  html += bandKey();
+
   html += '<div class="card"><div class="card-head"><div>' +
     '<div class="card-title">Decision queue &mdash; work down this list</div>' +
     '<div class="card-note">Every theme in scope, ranked by <strong>' +
@@ -1137,15 +1178,17 @@ function renderExec() {
       '<div class="chart" id="chart-domains"></div><div class="chart-note" id="chart-domains-note"></div></div>' +
     '</div>';
 
-  html += '<div class="two-col">' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">What is heating up</div>' +
-      '<div class="card-note">Requests opened in the last 90 days against the 90 before. A rising ' +
-      'domain is one to re-check against the roadmap before this PI closes.</div></div></div>' +
-      '<div class="chart" id="chart-momentum"></div><div class="chart-note" id="chart-momentum-note"></div></div>' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">Demand arriving over time</div>' +
-      '<div class="card-note">All requests in scope, by month opened.</div></div></div>' +
-      '<div class="chart" id="chart-trend"></div><div class="chart-note" id="chart-trend-note"></div></div>' +
-    '</div>';
+  // "Demand arriving over time" was cut here: a month-by-month line of the whole
+  // portfolio describes volume without implying an action, and "what is heating
+  // up" answers the only question it raised — where is new demand arriving —
+  // against a baseline instead of against nothing.
+  html += '<div class="card"><div class="card-head"><div>' +
+    '<div class="card-title">What is heating up</div>' +
+    '<div class="card-note">Requests opened in the last 90 days against the 90 before. A domain ' +
+    'moving right is one to re-check against the roadmap before this PI closes; a domain moving ' +
+    'left has gone quiet, which is either solved or abandoned and worth knowing which.</div>' +
+    '</div></div><div class="chart" id="chart-momentum"></div>' +
+    '<div class="chart-note" id="chart-momentum-note"></div></div>';
 
   // Escalations: the requests where a human wrote down the consequence.
   html += '<div class="card"><div class="card-head"><div>' +
@@ -1167,7 +1210,6 @@ function renderExec() {
   drawMatrix('chart-matrix', clusters, 'matrix-detail');
   drawDomainBands('chart-domains', clusters, domains);
   drawMomentum('chart-momentum', domains);
-  drawTrend('chart-trend', f.totals.monthly);
 }
 
 function toggleExpandAll(key) {
@@ -1248,6 +1290,8 @@ function renderDomain(domainId) {
         '</strong> business-impact flags</span>' : '') +
     '</div><p>' + dom.narrative + '</p></div>';
 
+  html += bandKey();
+
   html += '<div class="three-col" style="margin-bottom:16px">' +
     decideColumn('start', 'Start now', 'commit this PI', startNow, domainId) +
     decideColumn('plan', 'Plan', 'size now, commit next PI', plan, domainId) +
@@ -1273,49 +1317,65 @@ function renderDomain(domainId) {
       : '') + '</div>';
 
   html += '<div class="two-col">' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">Themes ranked by PI Priority</div>' +
-      '<div class="card-note">Colour is the decision band, so the commit line is visible without reading ' +
-      'a number.</div></div></div><div class="chart" id="chart-rank-' + domainId + '"></div><div class="chart-note" id="chart-rank-' + domainId + '-note"></div></div>' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">ARR at stake by theme</div>' +
-      '<div class="card-note">Each account counted once. Compare against the ranking on the left: a tall ' +
-      'green bar with a low rank is a single large account, not a broad signal.</div></div></div>' +
-      '<div class="chart" id="chart-arr-' + domainId + '"></div><div class="chart-note" id="chart-arr-' + domainId + '-note"></div></div>' +
     '</div>';
 
-  html += '<div class="two-col">' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">Where to act first in ' +
-      esc(dom.domain) + '</div><div class="card-note">Breadth against priority, sized by ARR. Click a ' +
-      'bubble for its cases.</div></div></div><div class="chart" id="chart-matrix-' + domainId + '"></div><div class="chart-note" id="chart-matrix-' + domainId + '-note"></div>' +
-      '<div id="matrix-detail-' + domainId + '"></div></div>' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">Requests opened over time</div>' +
-      '<div class="card-note">Is this domain quiet because it is solved, or because nobody has asked ' +
-      'lately?</div></div></div><div class="chart" id="chart-trend-' + domainId + '"></div><div class="chart-note" id="chart-trend-' + domainId + '-note"></div></div>' +
-    '</div>';
+  // What stands out — findings written from this domain's own numbers. These
+  // replaced two charts that redrew the table's own columns.
+  if (dom.insights && dom.insights.length) {
+    html += '<div class="card"><div class="card-head"><div>' +
+      '<div class="card-title">What stands out in ' + esc(dom.domain) + '</div>' +
+      '<div class="card-note">Read these before the table. Each one is a finding about this ' +
+      'domain, not a restatement of the numbers above it.</div></div></div>' +
+      '<div class="insights">' +
+      dom.insights.map(i => '<div class="insight ' + i.tone + '"><span class="dot"></span>' +
+        '<span>' + i.text + '</span></div>').join('') + '</div></div>';
+  }
 
-  html += '<div class="two-col">' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">How to read this domain</div>' +
-      '</div></div><div class="interp">' +
-      dom.interpretation.map(i => '<div class="interp-item ' + i.tone + '">' +
-        '<div class="interp-label">' + esc(i.label) + '</div>' +
-        '<div class="interp-text">' + i.text + '</div></div>').join('') + '</div></div>' +
-    '<div class="card"><div class="card-head"><div><div class="card-title">Recommended actions</div>' +
-      '<div class="card-note">Written from this domain\'s data. Each names the theme or case it applies ' +
-      'to.</div></div></div><div class="actions">' +
-      dom.actions.map((a, i) => '<div class="action"><div class="n">' + (i + 1) + '</div>' +
-        '<div class="t">' + a + '</div></div>').join('') + '</div></div>' +
-    '</div>';
+  // The decision matrix earns its space only when it can show a pattern: enough
+  // themes to have a shape, and some spread in customer breadth. On a domain
+  // where every theme has one customer it is a vertical line of dots, which is
+  // a worse way to read "nothing here is broad" than the sentence above.
+  // Gate tightened after review: 8 themes with a single 6-customer outlier still
+  // drew seven dots in a vertical line at x=1, which says "nothing here is broad"
+  // far worse than the sentence in the panel above does. A matrix needs enough
+  // themes AND enough of them with real breadth before it shows a pattern.
+  const multiCustomer = clusters.filter(c => c.customers > 1).length;
+  const matrixWorthIt = clusters.length >= 10 && multiCustomer >= 3;
+  if (matrixWorthIt) {
+    html += '<div class="card"><div class="card-head"><div>' +
+      '<div class="card-title">Where to act first in ' + esc(dom.domain) + '</div>' +
+      '<div class="card-note">Customer breadth against PI Priority, sized by ARR at stake. ' +
+      'Top right is build-once-satisfy-many; top left is urgent but single-customer, which is an ' +
+      'account conversation. Click a bubble to open its cases.</div></div></div>' +
+      '<div class="chart" id="chart-matrix-' + domainId + '"></div>' +
+      '<div class="chart-note" id="chart-matrix-' + domainId + '-note"></div>' +
+      '<div id="matrix-detail-' + domainId + '"></div></div>';
+  }
+
+  // "How to read this domain" used to sit beside this card. It was removed
+  // because its three read-outs restated the findings panel above it, and a tab
+  // that states a finding twice reads as padding; its two unique read-outs —
+  // revenue concentration and the age profile — moved into those findings.
+  // Actions therefore run full width rather than half a two-column grid.
+  html += '<div class="card"><div class="card-head"><div>' +
+    '<div class="card-title">Recommended actions</div>' +
+    '<div class="card-note">Written from this domain\'s data. Each names the theme or the case it ' +
+    'applies to, so it can be pasted into a board or a Salesforce comment as it stands.</div>' +
+    '</div></div><div class="actions">' +
+    dom.actions.map((a, i) => '<div class="action"><div class="n">' + (i + 1) + '</div>' +
+      '<div class="t">' + a + '</div></div>').join('') + '</div></div>';
 
   host.innerHTML = html;
 
-  drawThemeRanking('chart-rank-' + domainId, clusters);
-  drawThemeArr('chart-arr-' + domainId, clusters);
-  drawMatrix('chart-matrix-' + domainId, clusters, 'matrix-detail-' + domainId);
-  drawTrend('chart-trend-' + domainId, dom.monthly);
+  if (matrixWorthIt) {
+    drawMatrix('chart-matrix-' + domainId, clusters, 'matrix-detail-' + domainId);
+  }
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 
 function init() {
+  initTips();
   document.getElementById('headline').innerHTML = esc(frame().narrative.headline);
   renderControls();
   renderTabs();

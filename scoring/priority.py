@@ -396,9 +396,14 @@ def escalation_floor(records: Sequence[Dict]) -> tuple:
 
       * **$1M or more of ARR at stake** → at least Keep in backlog. Whether to
         tell a customer of that size no is an account conversation.
-      * **Three or more distinct customers asking** → at least Keep in backlog.
+      * **A second distinct customer asking** → at least Keep in backlog.
         Repeat demand across customers is the one signal this report exists to
-        surface, so it can never end in a closure recommendation by default.
+        surface, and the repetition model already treats the 1→2 step as the
+        largest single jump in the backlog — the moment a request stops being
+        anecdotal. A theme that clears that bar can never end in a closure
+        recommendation by default. (This floor was 3 customers until review
+        found a 2-customer, $577K theme badged "Drop candidate", which
+        contradicted the model's own premise.)
 
     The floor raises the score to the band's threshold rather than overriding
     the band underneath it, so score, band and sort order stay consistent — and
@@ -427,7 +432,7 @@ def escalation_floor(records: Sequence[Dict]) -> tuple:
         raise_to(BAND_BACKLOG, "the accounts behind it carry over $1M of ARR")
     accounts = {(r.get("account_name") or r.get("account") or "").strip() for r in records}
     accounts.discard("")
-    if len(accounts) >= 3:
+    if len(accounts) >= 2:
         raise_to(BAND_BACKLOG, f"{len(accounts)} different customers have asked")
 
     return floor, reason

@@ -490,6 +490,110 @@ Salesforce).
 
 ---
 
+## 7b. Review round two — fewer charts, badges that explain themselves
+
+Feedback on the shipped v2.6 was that the platform "looks great but: less charts
+more insights; more indicative badges with an explanation on hover; less unclear
+charts." A screenshot of the **Reporting** tab carried the evidence, including a
+defect nobody had spotted.
+
+### The entity bug the screenshot exposed
+
+Bar labels read `$318K &middot; 1 customer`, and a y-axis label read
+`Critical alerts classified as &quot;high&quot; in alerts report`. Plotly draws
+SVG text and **does not decode HTML entities**, so two things leaked:
+
+* `&middot;` written directly into Plotly `text` and `hovertemplate` strings, and
+* `&quot;` / `&amp;` produced by running the page's HTML escaper, `esc()`, over
+  category labels inside `wrapLabel`.
+
+Fixed with a separate `plotlyText()` escaper for anything that reaches a chart:
+quotes and ampersands pass through exactly as the customer typed them, and only
+`<` / `>` are swapped for the look-alike glyphs `‹` `›`, so `value < 10` keeps
+its meaning while no tag can be parsed out of a subject line. Every `&middot;` in
+a Plotly string became a literal `·`. `test_no_entity_leaks_in_chart_text`
+guards it, and the browser check asserts no `svg text` node matches
+`/&(quot|middot|amp|lt|gt);/`.
+
+### Four charts per domain became at most one
+
+On Reporting — 13 requests, 8 themes — the four charts were:
+
+| Chart | Why it went |
+|---|---|
+| Themes ranked by PI Priority | Redrew the Priority column of the table directly above it |
+| ARR at stake by theme | Redrew the ARR column of that same table |
+| Requests opened over time | A line wobbling between 0 and 5 at domain volume |
+| Where to act first | Six bubbles, five stacked on top of each other at x=1 |
+
+The first three are gone. The decision matrix is now **gated**: it renders only
+where it can show a pattern — `themes >= 10 && themes with >1 customer >= 3`. On
+the reference export that is 4 domains of 16 (EPP, SIEM, Endpoint Management,
+User Management); the other twelve tabs carry no chart at all. The exec page
+lost "Demand arriving over time" for the same reason — it described volume
+without implying an action, and "What is heating up" answers the only question it
+raised, against a baseline rather than against nothing. Exec is now three charts.
+
+### What replaced them: "What stands out"
+
+`pi_narrative.domain_insights()` writes three to seven findings per domain, each
+emitted **only when true of that domain**, so a tab shows what it has rather than
+a fixed grid of filler. The findings cover: whether any theme has breadth at all;
+whether one account is driving the tab (fires only above a 25% share — an earlier
+version reported "the most active account is X with 2 requests", which is true
+and not worth a row); whether demand has stopped, and when it last arrived;
+the severity ceiling; customer-stated business impact; the shape of the decision;
+revenue concentration; and anything old that still scores well.
+
+`test_insights_are_specific_not_filler` asserts every finding carries a digit or
+a named theme. It failed twice on first run and both failures were real — two
+findings were generalities until a count was put in them.
+
+### One panel, not two
+
+Adding the findings panel left the tab saying the same thing twice: the finding
+"Only one theme here has more than one customer — *Quarterly Reports*, at 6
+customers" sat directly above the Interpretation read-out "1 theme of 8 are asked
+for by multiple customers… *Quarterly Reports* is the broadest at 6 customers".
+**"More insights" cannot mean stating one insight twice**, so `domain_interpretation`
+was deleted, its two unique read-outs (revenue concentration, age profile) moved
+into the findings, and its CSS removed. `test_no_second_panel_of_observations`
+stops it coming back. Recommended actions stays and now runs full width — it is
+the only panel that says what to *do* rather than what is true.
+
+### Badges that explain themselves
+
+Each band badge now carries a **shape as well as a colour** — `▶` Start now,
+`◆` Plan, `■` Keep in backlog, `○` Drop candidate — so the four stay
+distinguishable in greyscale, in print, and to a colour-blind reader. Hovering
+one shows its full meaning: the score range, the floors that can lift something
+into it, and what the band asks the reader to do.
+
+The tooltip is a single element appended to `document.body` and positioned on
+hover, not a CSS `::after`. A pseudo-element tooltip is clipped by the
+`overflow-x: auto` container every table sits in, which is exactly where most
+badges are. It flips above or below the badge depending on room.
+
+A **Decision bands key** strip also renders above the first thing on each page
+that uses a badge — the exec decision queue, and each domain's decide columns.
+
+### A floor that contradicted the model
+
+Reviewing the new drop-band wording surfaced a theme with **2 customers and
+$577K** badged *Drop candidate*. The repetition model treats the 1→2 customer
+step as the largest single jump in the backlog — the moment a request stops being
+anecdotal — so recommending closure at 2 customers contradicted the model's own
+premise. **The repeat-customer floor moved from 3 customers to 2.** Drop themes
+fell from 167 to 158, Keep-in-backlog rose from 33 to 42, and no drop candidate
+now has a second customer or $1M behind it.
+
+Separately, `epic_rationale` was not band-aware, so a card badged *Drop
+candidate* carried the line "defensible to keep in the backlog if capacity is
+tight" — the rationale arguing with the badge above it. The second clause now
+branches on the band, and for a drop-band theme with real revenue behind it says
+so out loud: "Closing it means telling a $318K account no, so make that call
+deliberately rather than in bulk."
+
 ## 8. Known gaps
 
 1. **SOQL ingest does not capture Business Impact** (§2.2). A report built from

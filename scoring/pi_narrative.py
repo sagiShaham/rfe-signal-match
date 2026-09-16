@@ -329,92 +329,6 @@ def domain_narrative(dom: Dict[str, Any]) -> str:
     return " ".join(sentences)
 
 
-def domain_interpretation(dom: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Three labelled read-outs for the Interpretation panel.
-
-    Each answers something a PM asks of a domain tab and cannot get from a
-    chart: is this breadth or depth, where does the revenue exposure sit, and is
-    this backlog current or stale.
-    """
-    if not dom["requests"]:
-        return [{"label": "No demand in scope", "tone": "muted",
-                 "text": "Nothing to interpret for the selected timeframe."}]
-
-    out: List[Dict[str, str]] = []
-    clusters = sorted(dom["clusters"], key=P.sort_key("repetition"), reverse=True)
-    multi = [c for c in clusters if c["customers"] > 1]
-    singles = len(clusters) - len(multi)
-
-    # Demand shape — breadth vs depth.
-    if multi:
-        widest = multi[0]
-        out.append({
-            "label": "Demand shape", "tone": "accent",
-            "text": (f"{plural(len(multi), 'theme')} of {len(clusters)} are asked "
-                     f"for by multiple customers; {singles} come from a single "
-                     f"account. {_b(widest['name'])} is the broadest at "
-                     f"{plural(widest['customers'], 'customer')} across "
-                     f"{plural(widest['requests'], 'request')} — build-once, "
-                     f"satisfy-many territory."),
-        })
-    else:
-        deepest = max(clusters, key=lambda c: c["max_repeats"])
-        out.append({
-            "label": "Demand shape", "tone": "muted",
-            "text": (f"All {len(clusters)} themes here are single-customer. The most "
-                     f"insistent is {_b(deepest['name'])} "
-                     f"({plural(deepest['max_repeats'], 'request')} from one "
-                     f"account) — an account-management signal before it is a "
-                     f"roadmap signal."),
-        })
-
-    # Revenue concentration.
-    by_arr = sorted(dom["clusters"], key=P.sort_key("arr"), reverse=True)
-    if by_arr and by_arr[0]["arr"] > 0:
-        total = sum(c["arr"] for c in by_arr) or 1
-        lead = by_arr[0]
-        out.append({
-            "label": "Where the revenue sits", "tone": "green",
-            "text": (f"{_b(lead['name'])} carries {money(lead['arr'])} of the "
-                     f"{money(total)} across this domain's themes "
-                     f"({round(100 * lead['arr'] / total)}% of it). ARR counts each "
-                     f"account once, so this is revenue exposure — not request "
-                     f"volume dressed up as money."),
-        })
-    else:
-        out.append({
-            "label": "Where the revenue sits", "tone": "muted",
-            "text": ("No ARR is recorded against the accounts asking in this "
-                     "domain, so prioritise on severity, repetition and product "
-                     "judgement rather than revenue."),
-        })
-
-    # Age profile.
-    stale = [c for c in dom["clusters"]
-             if c["median_age_days"] is not None and c["median_age_days"] > 365]
-    fresh = dom["recent_90"]
-    if stale:
-        oldest = max(stale, key=lambda c: c["median_age_days"])
-        out.append({
-            "label": "Age profile", "tone": "orange",
-            "text": (f"{plural(len(stale), 'theme')} have a median age over a year, "
-                     f"the oldest being {_b(oldest['name'])} at "
-                     f"{months_of(oldest['median_age_days'])} months. "
-                     f"{plural(fresh, 'request')} in this domain arrived in the last "
-                     f"90 days. Age alone is not a reason to build, but an old "
-                     f"request that still scores well is one the team keeps "
-                     f"deciding not to decide."),
-        })
-    else:
-        out.append({
-            "label": "Age profile", "tone": "accent",
-            "text": (f"This is a current backlog: {fresh} of {dom['requests']} "
-                     f"requests arrived in the last 90 days, and no theme has a "
-                     f"median age above a year."),
-        })
-    return out
-
-
 def domain_actions(dom: Dict[str, Any]) -> List[str]:
     """Concrete next actions for the Action panel — named, countable, ownable.
 
@@ -474,26 +388,196 @@ def domain_actions(dom: Dict[str, Any]) -> List[str]:
     return actions
 
 
+def domain_insights(dom: Dict[str, Any]) -> List[Dict[str, str]]:
+    """"What stands out" — the observations that replaced three of four charts.
+
+    A domain tab used to carry four charts. On a small domain (Reporting: 13
+    requests across 8 themes) two of them simply redrew columns of the table
+    directly above — theme priority and theme ARR — a third plotted six bubbles
+    that mostly sat on top of each other at x=1, and the fourth drew a line
+    wobbling between 0 and 5 requests a month. None of them told the reader
+    anything the table had not already said.
+
+    These take their place. Each is a single finding, stated with the number
+    that supports it and the consequence that follows, and each is emitted ONLY
+    when it is true of this domain — so a tab shows three findings or six, never
+    a fixed grid of filler. Ordered most-decision-relevant first; the caller
+    takes as many as it has room for.
+    """
+    if not dom["requests"]:
+        return []
+
+    clusters = dom["clusters"]
+    out: List[Dict[str, str]] = []
+
+    def add(tone: str, text: str) -> None:
+        out.append({"tone": tone, "text": text})
+
+    # 1. Is there any broad demand here at all? The single most useful fact
+    #    about a domain, and the one the charts were worst at showing.
+    multi = [c for c in clusters if c["customers"] > 1]
+    if multi:
+        widest = max(multi, key=lambda c: c["customers"])
+        if len(multi) == 1:
+            add("accent",
+                f"Only one theme here has more than one customer behind it — "
+                f"{_b(widest['name'])}, at {plural(widest['customers'], 'customer')}. "
+                f"Everything else in this domain is a single account's ask.")
+        else:
+            add("accent",
+                f"{plural(len(multi), 'theme')} of {len(clusters)} are asked for by "
+                f"more than one customer, the widest being {_b(widest['name'])} at "
+                f"{plural(widest['customers'], 'customer')}. Those are the "
+                f"build-once-satisfy-many candidates.")
+    else:
+        add("orange",
+            f"No theme in this domain has a second customer behind it. All "
+            f"{len(clusters)} come from one account each, so nothing here is yet a "
+            f"product signal — it is {plural(len(clusters), 'account conversation')}.")
+
+    # 2. Is one account driving the whole tab?
+    top = dom["top_accounts"][0] if dom["top_accounts"] else None
+    if top and top["requests"] > 1:
+        share = round(100 * top["requests"] / dom["requests"])
+        if share >= 25:
+            add("orange",
+                f"{_e(top['name'])} alone filed {plural(top['requests'], 'request')} "
+                f"here — {share}% of the domain. Read this tab as that account's "
+                f"priorities before reading it as the market's.")
+
+    # 3. Has demand stopped? Replaces the per-domain trend chart, which at this
+    #    volume was a line wobbling between zero and five.
+    monthly = [m for m in dom.get("monthly", []) if m["count"]]
+    if monthly:
+        last = monthly[-1]["month"]
+        if dom["recent_90"]:
+            add("accent",
+                f"{plural(dom['recent_90'], 'request')} arrived in the last 90 days, "
+                f"the most recent in {_month(last)} — this demand is live.")
+        else:
+            add("orange",
+                f"Nothing new has arrived in this domain since {_month(last)}. "
+                f"Either it is solved, or nobody is asking any more — worth "
+                f"confirming which before committing capacity to it.")
+
+    # 4. Severity ceiling — cheap to read, and it frames the whole tab.
+    mix = dom["severity_mix"]
+    crit, high = mix.get("critical", 0), mix.get("high", 0)
+    if crit:
+        add("red",
+            f"{plural(crit, 'request')} here {'is' if crit == 1 else 'are'} "
+            f"Critical severity. Those cannot sit in the backlog by default — "
+            f"each needs an explicit yes or no.")
+    elif not high:
+        add("muted",
+            f"All {dom['requests']} requests here are Medium severity or below, so "
+            f"severity is not what should decide this tab — repetition and ARR are.")
+
+    # 5. Customer-stated business impact.
+    if dom["flagged"]:
+        add("red",
+            f"{plural(dom['flagged'], 'request')} carry a customer-stated business "
+            f"impact and need an answer to the customer whether or not the theme "
+            f"gets committed.")
+
+    # 6. The shape of the decision, stated plainly.
+    bands = dom["band_counts"]
+    if not bands.get("start_now") and not bands.get("plan"):
+        add("muted",
+            f"None of the {len(clusters)} themes here reaches the commit threshold "
+            f"this cycle. Treat this tab as a cleanup pass rather than a planning "
+            f"one.")
+    elif bands.get("drop"):
+        drop_requests = sum(c["requests"] for c in clusters
+                            if c["band"]["key"] == "drop")
+        add("muted",
+            f"{plural(bands['drop'], 'theme')} ({plural(drop_requests, 'request')}) "
+            f"score below the keep threshold. Closing them is the cheapest way to "
+            f"make what remains in this domain mean something.")
+
+    # 7. Where the revenue actually sits (absorbed from the Interpretation panel).
+    by_arr = sorted(clusters, key=P.sort_key("arr"), reverse=True)
+    if by_arr and by_arr[0]["arr"] > 0:
+        total = sum(c["arr"] for c in by_arr) or 1
+        lead = by_arr[0]
+        share = round(100 * lead["arr"] / total)
+        if share >= 30:
+            add("green",
+                f"{_b(lead['name'])} carries {money(lead['arr'])} of the "
+                f"{money(total)} across this domain — {share}% of its revenue "
+                f"exposure in one theme. ARR counts each account once, so that is "
+                f"exposure, not request volume dressed up as money.")
+    else:
+        add("muted",
+            f"No ARR is recorded against the accounts asking in this domain, so "
+            f"prioritise it on severity, repetition and product judgement rather "
+            f"than revenue.")
+
+    # 8. Something old that still scores — the decision the team keeps deferring.
+    stale = [c for c in clusters
+             if c["median_age_days"] is not None and c["median_age_days"] > 365
+             and c["band"]["key"] in ("start_now", "plan", "backlog")]
+    if stale:
+        oldest = max(stale, key=lambda c: c["median_age_days"])
+        add("orange",
+            f"{_b(oldest['name'])} has been waiting "
+            f"{months_of(oldest['median_age_days'])} months and still scores in the "
+            f"{oldest['band']['label'].lower()} band — a decision that keeps being "
+            f"deferred rather than taken.")
+
+    return out
+
+
+def _month(iso: str) -> str:
+    """'2026-04' → 'April 2026'."""
+    names = ["January", "February", "March", "April", "May", "June", "July",
+             "August", "September", "October", "November", "December"]
+    try:
+        year, month = iso.split("-")[:2]
+        return f"{names[int(month) - 1]} {year}"
+    except (ValueError, IndexError):
+        return iso
+
+
 def epic_rationale(cluster: Dict[str, Any]) -> str:
     """The 'why now' line on an epic card and in the decision queue.
 
-    Two clauses: what carries this theme, and what deferring it means in
+    Two clauses: what carries this theme, and what the decision costs in
     practice. Never speculates about churn — it states who stays on a workaround.
+
+    The second clause is **band-aware**. An earlier version was not, and put
+    "defensible to keep in the backlog if capacity is tight" on a card badged
+    *Drop candidate* — the rationale arguing with the badge directly above it.
     """
     carried = cluster["why"]
-    if cluster["customers"] > 1:
-        deferral = (f"Deferring leaves {plural(cluster['customers'], 'customer')} "
-                    f"({money(cluster['arr'])}) on their current workaround.")
+    band = cluster.get("band", {}).get("key", "backlog")
+
+    if band == "drop":
+        # The consequence of closing, not of deferring — and the size of the
+        # account is said out loud, because "propose closing" reads very
+        # differently to the person who has to make that call to a $318K customer.
+        if cluster["arr"] >= 250_000:
+            consequence = (f"Closing it means telling a {money(cluster['arr'])} account "
+                           f"no, so make that call deliberately rather than in bulk.")
+        elif cluster["max_repeats"] > 1:
+            consequence = (f"One account asked {cluster['max_repeats']} times and nobody "
+                           f"else has — worth a word with them before it is closed.")
+        else:
+            consequence = ("One customer, no impact flag and little revenue behind it: "
+                           "the cheapest thing on this page to close.")
+    elif cluster["customers"] > 1:
+        consequence = (f"Deferring leaves {plural(cluster['customers'], 'customer')} "
+                       f"({money(cluster['arr'])}) on their current workaround.")
     elif cluster["max_repeats"] > 1:
-        deferral = (f"The requesting account has already come back "
-                    f"{cluster['max_repeats']} times on this.")
+        consequence = (f"The requesting account has already come back "
+                       f"{cluster['max_repeats']} times on this.")
     elif cluster["arr"] >= 250_000:
-        deferral = (f"One account at {money(cluster['arr'])} is behind it, so this "
-                    f"is an account conversation as much as a roadmap one.")
+        consequence = (f"One account at {money(cluster['arr'])} is behind it, so this "
+                       f"is an account conversation as much as a roadmap one.")
     else:
-        deferral = ("Single customer, limited revenue behind it — defensible to "
-                    "keep in the backlog if capacity is tight.")
-    return f"{carried[0].upper() + carried[1:]}. {deferral}"
+        consequence = ("Single customer, limited revenue behind it — defensible to "
+                       "keep in the backlog if capacity is tight.")
+    return f"{carried[0].upper() + carried[1:]}. {consequence}"
 
 
 def data_quality_notes(model: Dict[str, Any]) -> List[str]:

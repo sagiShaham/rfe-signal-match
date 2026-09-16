@@ -220,9 +220,13 @@ def test_large_account_theme_is_never_a_drop_candidate():
     assert "ARR" in g["escalated"]
 
 
-def test_three_customers_is_never_a_drop_candidate():
+def test_a_second_customer_is_never_a_drop_candidate():
+    """The 1->2 customer step is the largest jump in the repetition model, so a
+    theme that clears it cannot be recommended for closure. Review found a
+    2-customer, $577K theme badged "Drop candidate" under the old 3-customer
+    floor."""
     records = [_rfe(account=f"Acct {i}", arr=1_000, severity="Low", days=900)
-               for i in range(3)]
+               for i in range(2)]
     g = P.score_group(records, now=NOW)
     assert g["band"]["key"] != "drop"
     assert "customers" in g["escalated"]

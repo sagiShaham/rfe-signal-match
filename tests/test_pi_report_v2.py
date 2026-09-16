@@ -274,8 +274,24 @@ def test_narratives_contain_no_placeholder_text(model):
 def test_domain_panels_are_written_for_every_active_domain(model):
     for d in model["tf"]["all"]["domains"]:
         if d["requests"]:
-            assert len(d["interpretation"]) >= 2
+            assert len(d["insights"]) >= 2, f"{d['domain']} has no findings"
             assert d["actions"] and all(a.strip() for a in d["actions"])
+
+
+def test_no_second_panel_of_observations(model):
+    """The Interpretation panel was removed because it restated the findings
+    above it. Nothing may reintroduce a second panel of observations."""
+    for d in model["tf"]["all"]["domains"]:
+        assert "interpretation" not in d
+
+
+def test_insights_are_specific_not_filler(model):
+    """Every finding carries a number or a named theme — none is a platitude."""
+    for d in model["tf"]["all"]["domains"]:
+        for ins in d["insights"]:
+            text = ins["text"]
+            assert re.search(r"\d", text) or "<strong>" in text, text
+            assert "..." not in text and "…" not in text
 
 
 # ── Rendered page ────────────────────────────────────────────────────────────
@@ -310,6 +326,21 @@ def test_no_ellipsis_truncation_in_the_page(html):
     # is chart density, and `test_chart_subsets_are_disclosed` covers it.)
     for field in ("subject", "name", "pm", "cluster", "rationale", "original"):
         assert not re.search(field + r"\s*(\|\|\s*'')?\s*\)?\.slice\(", html), field
+
+
+def test_no_entity_leaks_in_chart_text(html):
+    """Plotly draws SVG text and does NOT decode HTML entities.
+
+    The shipped v2.6 put `$318K &middot; 1 customer` on a bar label and
+    `classified as &quot;high&quot;` on a y-axis, because chart strings carried
+    `&middot;` directly and `wrapLabel` ran the HTML escaper over category
+    labels. Anything bound for a chart goes through `plotlyText` instead.
+    """
+    assert "function plotlyText(" in html
+    assert "lines.map(plotlyText)" in html, "wrapLabel must not HTML-escape a chart label"
+    for line in html.splitlines():
+        if "hovertemplate:" in line or "text: items.map" in line:
+            assert "&middot;" not in line and "&quot;" not in line and "&amp;" not in line, line
 
 
 def test_chart_subsets_are_disclosed(html):

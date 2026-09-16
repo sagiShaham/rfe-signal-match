@@ -674,7 +674,7 @@ def build_timeframe(records: Sequence[Dict], cutoff: Optional[datetime],
             "flag_reasons", "severity_mix", "top_severity", "max_repeats",
             "recent_90", "recent_180", "median_age_days", "why")})
         dom["narrative"] = N.domain_narrative(dom)
-        dom["interpretation"] = N.domain_interpretation(dom)
+        dom["insights"] = N.domain_insights(dom)
         dom["actions"] = N.domain_actions(dom)
         # `clusters` was needed by the narrative writers but would double the
         # payload if embedded here — the page looks clusters up by domain_id.
