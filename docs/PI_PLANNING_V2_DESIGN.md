@@ -594,6 +594,108 @@ branches on the band, and for a drop-band theme with real revenue behind it says
 so out loud: "Closing it means telling a $318K account no, so make that call
 deliberately rather than in bulk."
 
+## 7c. The Weekly Analysis report, classified the same way
+
+The request was for the weekly tab to classify on exactly the dimensions the PI
+report does — severity, business impact, ARR, repetition, timeframe — plus a
+per-domain PDF.
+
+### Why "the same" had to mean the same code
+
+A PM reads both reports about the same backlog in the same week. If the weekly
+report calls a request a drop candidate while the PI report has it in Plan, the
+reader is right to distrust both. So the parts that must not drift moved into
+`scoring/report_ui.py`: the band metadata and their hover explanations,
+`bandBadge()`, `bandKey()`, the tooltip engine, and the control bar. Both asset
+layers inject them verbatim, and `test_badges_match_the_pi_report_exactly`
+asserts the same string is in both pages.
+
+The weekly report's own `priority_score()` — ARR/50K×2 + severity×3 + recency×2,
+unbounded, with no business impact and no repetition — is deprecated in place and
+replaced by `scoring.priority.score_rfe`.
+
+### Two mechanisms, one set of semantics
+
+The PI report renders rows from an embedded payload and can re-render on every
+control change. The weekly report renders its cards in Python. Rewriting it to
+match would be a large change for no reader-visible gain, so the same five
+controls drive a different mechanism: every card carries `data-sev`, `data-bi`,
+`data-arr`, `data-cust`, `data-days` and `data-score`, and `report_ui.FILTER_JS`
+shows, hides and reorders the DOM. The semantics are identical — same option
+boundaries, same sort comparators, filters narrow but never re-score, and an
+undated card belongs to All time only.
+
+### Measuring whether they actually agree
+
+Worth measuring rather than assuming. On the reference export, first attempt:
+
+| | agreement |
+|---|---|
+| identical decision band | 96% |
+| identical repetition | **76%** |
+
+The repetition gap had one cause. Clustering only ever compares requests inside
+one domain, and the two reports partition differently — the weekly keeps Web
+Access Control as its own section where the PI report folds it into EPP — so the
+same request landed in different-sized groups. Repetition is now measured inside
+the **PI report's** domain partition in both reports; the weekly's ten display
+sections are untouched. That moved it to:
+
+| | agreement |
+|---|---|
+| identical decision band | **98%** (326/331) |
+| identical repetition | **99%** (327/331) |
+| score within 5 points | **99%** |
+
+The residue is four cases whose subject cleaning differs slightly between the two
+modules, and a score difference of a point or two because the weekly report pins
+"now" to its report date by design while the PI report uses the current date.
+
+### Two bugs the alignment exposed
+
+**The catch-all bucket was collecting repetition it had not earned.**
+`build_clusters` sweeps everything unmatched into "Other Requests in this
+Domain". Scored as a theme, it became the **top-ranked theme in EPP at 25
+customers**, and pushed 298 of 331 requests past a "3+ customers" filter. It is
+not a theme — its members have nothing in common beyond not fitting elsewhere.
+Catch-alls now measure each member on its own account, are ranked by the
+strongest request inside them rather than by breadth, and always sort last.
+After the fix, "3+ customers" matches 112 rather than 298.
+
+**Unset severity was being rewritten as "Low"** on load — a claim the export does
+not make, and the opposite of the PI report's reading (unset usually means nobody
+triaged it). The default is gone; cluster severity now ranks unset below
+everything that is set rather than level with Low. This was caught by a test
+written for the change, against an earlier edit of mine that had patched the
+wrong line.
+
+### The per-domain PDF
+
+Each domain gets an **Export this domain as PDF** button that prints a sheet
+built for the purpose — not the screen. Restyling the interactive layout would
+mean hiding a sidebar, a control bar, charts, expand arrows and decision buttons
+and hoping what remains lands on one page; it would not, because every theme
+carries its full case detail.
+
+The sheet answers what a reviewer who was not in the meeting needs: how big this
+is (five stat tiles), what has to be decided (the four bands with their shapes),
+which themes carry it (top 8, with PI score, band, severity, ARR, customers,
+cases and the reason each is ranked where it is), and which cases need an
+individual answer (business-impact escalations, with case numbers). A footer
+states how the ranking works and that ARR counts each account once.
+
+Printing is the browser's own print-to-PDF: nothing to install on the VM, works
+offline, and the reader keeps their own paper size. A server-side PDF library
+would add a dependency to a machine where installing one has been painful, for a
+worse-looking result.
+
+Measured on the reference export, every domain fits one A4 page — EPP, the
+largest at 116 requests, uses 0.89 of a page; the smallest 0.49.
+
+One bug found in review: the screen layout had become a CSS grid with a 250px
+sidebar column, so the print sheet rendered **inside that column**. `@media
+print` now resets `body` to `display:block`.
+
 ## 8. Known gaps
 
 1. **SOQL ingest does not capture Business Impact** (§2.2). A report built from

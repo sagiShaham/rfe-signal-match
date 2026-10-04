@@ -28,6 +28,9 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from scoring import pm_summary
+from scoring import priority as P
+from scoring import pi_report_generator as PIG
+from scoring import report_ui
 
 # ── Sections (skill: 10 domains + Executive) ─────────────────────────────────
 
@@ -297,11 +300,18 @@ def load_rfes(db_path: str, run_id: str | None = None) -> Tuple[List[Dict[str, A
             meta = dict(row)
             run_id = row["run_id"]
 
+        # Business Impact is the only field in the export where a person states a
+        # consequence, so the weekly report reads it for the same reason the PI
+        # report does. Selected only when present, so a report built against a
+        # database that predates the migration still works.
+        have = {row[1] for row in conn.execute("PRAGMA table_info(rfe_pulls)")}
+        extra = [c for c in ("business_impact", "business_impact_reason",
+                             "case_owner", "arr_currency") if c in have]
+        cols = ("case_number, subject, description, account_name, account_arr, "
+                "status, domain, sub_domain, severity, created_date"
+                + ("".join(", " + c for c in extra)))
         rows = conn.execute(
-            """SELECT case_number, subject, description, account_name, account_arr,
-                      status, domain, sub_domain, severity, created_date
-               FROM rfe_pulls WHERE run_id=?""",
-            (run_id,),
+            f"SELECT {cols} FROM rfe_pulls WHERE run_id=?", (run_id,)
         ).fetchall()
 
         # Cross-run description backfill (case_number -> longest description)
@@ -335,7 +345,11 @@ def load_rfes(db_path: str, run_id: str | None = None) -> Tuple[List[Dict[str, A
             desc = backfill[cn]
             backfilled += 1
 
-        sev = (r["severity"] or "").strip() or "Low"
+        # No default: an unset severity is recorded as unset. Writing "Low"
+        # here asserts something the export does not say, and it is the
+        # reading the PI report deliberately avoids — unset usually means
+        # nobody triaged it, not that it is harmless.
+        sev = (r["severity"] or "").strip()
         opened = _parse_date(r["created_date"] or "")
         records.append({
             "case_number": cn,
@@ -347,8 +361,20 @@ def load_rfes(db_path: str, run_id: str | None = None) -> Tuple[List[Dict[str, A
             "status": (r["status"] or "").strip(),
             "sf_domain": (r["domain"] or "").strip(),
             "sub_domain": (r["sub_domain"] or "").strip(),
-            "severity": sev if sev in SEV_WEIGHT else "Low",
+            # An unrecognised severity used to be rewritten as "Low", which is a
+            # claim the data does not make. It is kept as-is and scored just
+            # below Medium, exactly as the PI report does.
+            "severity": sev if sev in SEV_WEIGHT else (sev or ""),
             "opened": opened,
+            "business_impact": (r["business_impact"]
+                                if "business_impact" in r.keys() else ""),
+            "business_impact_reason": (r["business_impact_reason"]
+                                       if "business_impact_reason" in r.keys() else "") or "",
+            "arr_currency": (r["arr_currency"] if "arr_currency" in r.keys() else "") or "",
+            "case_owner": (r["case_owner"] if "case_owner" in r.keys() else "") or "",
+            # scoring.priority reads these names; the weekly report uses its own.
+            "account_arr": float(r["account_arr"] or 0),
+            "created_date": (r["created_date"] or ""),
             "pm_summary": summaries.get(cn, ""),
             "decision": decisions.get(cn, {}).get("decision", ""),
             "decision_note": decisions.get(cn, {}).get("note", ""),
@@ -380,11 +406,119 @@ def report_date_for(records: List[Dict[str, Any]]) -> Tuple[datetime, bool]:
 
 
 def priority_score(rfe: Dict[str, Any], report_date: datetime) -> float:
+    """Deprecated: the weekly report's own ad-hoc score.
+
+    Kept only so an older caller does not break. It read ARR, severity and
+    recency on an unbounded scale with no business impact and no repetition,
+    which meant the weekly report and the PI Planning report could rank the same
+    request differently. Both now use `scoring.priority.score_rfe` — see
+    `score_records()` below.
+    """
     arr_score = (rfe["arr"] / 50_000.0) * 2
     sev_score = SEV_WEIGHT.get(rfe["severity"], 1) * 3
     days = rfe["_days"]
     recency = (4 if days <= 7 else 2 if days <= 14 else 1) * 2
     return arr_score + sev_score + recency
+
+
+CATCH_ALL_TITLES = {"Other Requests in this Domain", "Other Requests"}
+
+
+def is_catch_all(cluster: Dict[str, Any]) -> bool:
+    """Is this the leftover bucket rather than a real theme?
+
+    `build_clusters` sweeps everything that matched no pattern and no sibling
+    into one bucket so the cluster count stays readable. That bucket is not a
+    theme: its members have nothing in common beyond not fitting elsewhere, so
+    it must not collect repetition credit or be ranked as though 25 customers
+    had asked for the same thing.
+    """
+    return cluster.get("title", "") in CATCH_ALL_TITLES
+
+
+def score_records(records: List[Dict[str, Any]],
+                  clusters_by_section: Dict[str, List[Dict[str, Any]]],
+                  report_date: datetime) -> None:
+    """Attach the PI Priority score, band and drivers to every record, in place.
+
+    Repetition is the one signal that cannot be read off a single row, so it is
+    measured over the weekly report's own clusters: a request inherits the
+    distinct-customer count of the theme it belongs to. That is the same
+    definition the PI report uses — breadth across accounts, kept separate from
+    one account repeating — just computed over this report's grouping.
+
+    Called after clustering, which is why it is not folded into the first pass
+    over `records`.
+    """
+    # Repetition is measured over the SAME grouping the PI Planning report uses —
+    # requests asking for the same thing, matched on subject similarity — not
+    # over this report's display clusters.
+    #
+    # The two groupings answer different questions and must not be confused. The
+    # weekly report groups into 6-12 broad thematic areas per domain with 100%
+    # coverage, because its job is to walk a domain's work end to end; "Allowlist,
+    # Exclusions & Rules" legitimately spans 17 accounts. The PI report groups by
+    # what was actually asked for. If repetition came from the thematic areas, the
+    # same case would read "17 customers" in one report and "2" in the other, and
+    # a reader would be right to distrust both. So the tighter clustering is run
+    # here purely to measure repetition; the thematic areas still drive the layout.
+    # Cluster inside the PI report's domain partition, not this report's ten
+    # sections. Clustering only ever compares requests within one domain, so if
+    # the partitions differ the clusters differ — and measuring showed exactly
+    # that: repetition matched on only 76% of cases, almost all of it caused by
+    # the two taxonomies splitting a domain differently (this report keeps Web
+    # Access Control separate; the PI report folds it into EPP). Using the same
+    # partition makes "how many customers asked for this" one number across both
+    # reports. The ten display sections are untouched.
+    scope = [dict(r, _domain=PIG.classify_domain(r["sf_domain"], r.get("sub_domain", ""),
+                                                 r["subject"], r["description"]))
+             for r in records]
+    PIG.cluster_records(scope)
+    cluster_of = {r["case_number"]: (r["_domain"], r.get("_cluster", ""))
+                  for r in scope}
+    for r in records:
+        key = cluster_of.get(r["case_number"])
+        r["_domain"], r["_cluster"] = key if key else (r["_section"], r["subject"])
+    rep_index = P.build_repetition_index(records)
+    rep_by_case = {r["case_number"]: rep_index[f"{r['_domain']}||{r['_cluster']}"]
+                   for r in records}
+
+    singleton = {"requests": 1, "customers": 1, "max_repeats": 1}
+    for r in records:
+        scored = P.score_rfe(r, rep_by_case.get(r["case_number"], singleton),
+                             now=report_date)
+        r["_pi"] = scored
+        r["_score"] = scored["score"]          # the sort key the report already uses
+        r["_band"] = scored["band"]
+        r["_customers"] = scored["customers"]
+        r["_requests"] = scored["requests"]
+        r["_why"] = scored["why"]
+
+    # A cluster's score follows its members, so the ranking a reader sees at
+    # theme level is the same number, aggregated the same way as the PI report.
+    for section, clusters in clusters_by_section.items():
+        for cluster in clusters:
+            members = cluster["members"]
+            group = P.score_group(members, now=report_date)
+            # A thematic area is a reading group, not one request, so it is
+            # ranked by the strongest thing inside it rather than by the breadth
+            # of the area — otherwise a wide bucket outranks a sharp signal.
+            best = max((m.get("_pi") or {"score": 0, "band": group["band"]}
+                        for m in members), key=lambda x: x["score"])
+            group = dict(group, score=best["score"], band=best["band"],
+                         customers=max((m.get("_customers", 1) for m in members),
+                                       default=1))
+            if is_catch_all(cluster):
+                group["why"] = ("a bucket of unrelated requests that did not fit a "
+                                "theme — read them individually")
+            cluster["pi"] = group
+            cluster["score"] = group["score"]
+            cluster["band"] = group["band"]
+            cluster["customers"] = group["customers"]
+            cluster["arr"] = group["arr"]        # distinct accounts, never per-row
+            cluster["flagged"] = group["flagged"]
+            cluster["why"] = group["why"]
+            cluster["catch_all"] = is_catch_all(cluster)
 
 
 def trend_of(days: int) -> str:
@@ -461,8 +595,10 @@ def build_clusters(rfes: List[Dict[str, Any]], section: str) -> List[Dict[str, A
         members.sort(key=lambda r: -r["_score"])
         arr_total = sum(m["arr"] for m in members)
         accounts = sorted({m["account_name"] for m in members})
+        # SEV_WEIGHT has no entry for an unset severity; scoring it 1 would
+        # rank it level with Low, so it is ranked below everything that is set.
         sev = max((m["severity"] for m in members),
-                  key=lambda s: SEV_WEIGHT.get(s, 1))
+                  key=lambda s: SEV_WEIGHT.get(s, 0))
         min_days = min(m["_days"] for m in members)
         clusters.append({
             "title": title,
@@ -606,6 +742,35 @@ def _decision_html(rfe: Dict[str, Any]) -> str:
             f'{btns}{clear}<span class="decision-saved" id="saved-{cn}"></span></div>')
 
 
+# Mirrors report_ui.BAND_META so a server-rendered badge is identical to the
+# one the PI report builds in JavaScript — same shape, same label, same tooltip.
+BAND_MARK = {"start_now": "\u25b6", "plan": "\u25c6",
+             "backlog": "\u25a0", "drop": "\u25cb"}
+BAND_TIP = {
+    "start_now": ("<b>Start now &mdash; Commit to this PI</b><br>Score 68 or above. "
+                  "Carried by more than one signal at once &mdash; severity, ARR, repeat "
+                  "demand across customers, or a business impact the customer stated."),
+    "plan": ("<b>Plan &mdash; Size now, commit next PI</b><br>Score 54 to 67, or lifted "
+             "here because severity is Critical or the customer wrote down the business "
+             "consequence."),
+    "backlog": ("<b>Keep in backlog &mdash; Revisit next cycle</b><br>Score 38 to 53, or "
+                "lifted here because a customer flagged business impact, because $1M or "
+                "more of ARR sits behind it, or because a second customer has asked."),
+    "drop": ("<b>Drop candidate &mdash; Propose closing with the customer</b><br>Below 38: "
+             "one customer, no business-impact flag, limited severity and limited ARR."),
+}
+
+
+def _band_badge(key: str) -> str:
+    """The decision badge, server-rendered."""
+    if not key:
+        return ""
+    label = {"start_now": "Start now", "plan": "Plan",
+             "backlog": "Keep in backlog", "drop": "Drop candidate"}[key]
+    return (f'<span class="band {key}" data-tip="{BAND_TIP[key]}">'
+            f'<span class="mark">{BAND_MARK[key]}</span>{label}</span>')
+
+
 def _rfe_card(rfe: Dict[str, Any]) -> str:
     cn = _esc(rfe["case_number"])
     sev = _esc(rfe["severity"])
@@ -613,7 +778,17 @@ def _rfe_card(rfe: Dict[str, Any]) -> str:
     dec = rfe.get("decision") or ""
     dec_chip = (f'<span class="chip chip-decision">{_esc(DECISION_LABEL.get(dec, dec))}</span>'
                 if dec else "")
-    return f"""<div class="rfe-card">
+    pi = rfe.get("_pi") or {}
+    band = (rfe.get("_band") or {}).get("key", "")
+    sev_key = P.normalise_severity(rfe["severity"])
+    flagged = P.is_business_impact(rfe)
+    days = rfe.get("_days")
+    flag_chip = ('<span class="chip chip-flag" title="Business impact stated by the '
+                 'customer">&#9873; Business impact</span>' if flagged else "")
+    return f"""<div class="rfe-card" data-sev="{sev_key}" data-bi="{1 if flagged else 0}"
+     data-arr="{int(rfe['arr'] or 0)}" data-cust="{rfe.get('_customers', 1)}"
+     data-reqs="{rfe.get('_requests', 1)}" data-score="{pi.get('score', 0)}"
+     data-days="{'' if days is None or days >= 999 else days}">
   <div class="rfe-card-header">
     <span class="case-badge" onclick="copyCase('{cn}')">{cn}</span>
     <span class="rfe-subject">{_esc(rfe['subject'])}</span>
@@ -622,10 +797,15 @@ def _rfe_card(rfe: Dict[str, Any]) -> str:
   <div class="rfe-meta-row">
     <span class="chip chip-account">{_esc(rfe['account_name'])}</span>
     <span class="chip chip-arr2">{fmt_arr(rfe['arr'])}</span>
-    <span class="chip chip-sev-{sev}">{sev}</span>
+    <span class="chip chip-sev-{sev}">{sev or 'Unset'}</span>
     <span class="chip chip-status">{_esc(rfe['status'] or '—')}</span>
     <span class="chip chip-date">{_esc(opened)}</span>
+    {flag_chip}
     {dec_chip}
+  </div>
+  <div class="rfe-rank-row">
+    <span class="pi-score" data-tip="<b>PI Priority {pi.get('score', 0)} of 100</b><br>{_esc(rfe.get('_why', ''))}">PI {pi.get('score', 0)}</span>
+    {_band_badge(band)}
   </div>
   {_pm_summary_html(rfe)}
   {_decision_html(rfe)}
@@ -652,7 +832,16 @@ def _cluster_row(cluster: Dict[str, Any], rank: int, section: str) -> str:
         + (" and others." if n_cases > 3 else ".")
     )
     cards = "".join(_rfe_card(m) for m in cluster["members"])
-    return f"""<div class="request-card">
+    pi = cluster.get("pi") or {}
+    band = (cluster.get("band") or {}).get("key", "")
+    sev_key = P.normalise_severity(cluster.get("severity", ""))
+    ages = [m.get("_days") for m in cluster["members"]
+            if m.get("_days") is not None and m.get("_days") < 999]
+    return f"""<div class="request-card" data-sev="{sev_key}"
+     data-bi="{1 if cluster.get('flagged') else 0}"
+     data-arr="{int(cluster.get('arr') or 0)}" data-cust="{cluster.get('customers', n_acct)}"
+     data-reqs="{n_cases}" data-score="{pi.get('score', cluster.get('score', 0))}"
+     data-days="{min(ages) if ages else ''}">
   <div class="request-header" onclick="toggleDetail('{rid}')">
     <div class="rank-badge {rank_cls}">{rank}</div>
     <div class="request-info">
@@ -666,6 +855,9 @@ def _cluster_row(cluster: Dict[str, Any], rank: int, section: str) -> str:
         <span class="chip chip-sev-{_esc(cluster['severity'])}">{_esc(cluster['severity'])}</span>
         <span class="chip chip-count2">{n_cases} case{'s' if n_cases != 1 else ''}</span>
         <span class="chip chip-count2">{n_acct} account{'s' if n_acct != 1 else ''}</span>
+        <span class="pi-score" data-tip="<b>PI Priority {pi.get('score', 0)} of 100</b><br>{_esc(cluster.get('why', ''))}">PI {pi.get('score', 0)}</span>
+        {_band_badge(band)}
+        {f'<span class="chip chip-flag">&#9873; {cluster["flagged"]} business impact</span>' if cluster.get("flagged") else ""}
       </div>
       <div class="req-insight"><strong>Why it matters:</strong> {_esc(insight)}</div>
     </div>
@@ -784,6 +976,102 @@ def _domain_bullets(section: str, rfes: List[Dict[str, Any]],
 # Main entry point
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _print_sheet(sid: str, name: str, emoji: str, rfes: List[Dict[str, Any]],
+                 clusters: List[Dict[str, Any]], report_date: datetime) -> str:
+    """One domain, one page — the sheet that becomes the PDF.
+
+    Deliberately not a copy of the screen. It answers the four things a reviewer
+    who was not in the meeting needs: how big is this, what has to be decided,
+    which themes carry it, and which cases need an individual answer.
+    """
+    if not rfes:
+        return ""
+
+    accounts = {r["account_name"] for r in rfes if r.get("account_name")}
+    arr = P.distinct_account_arr(rfes)
+    flagged = [r for r in rfes if P.is_business_impact(r)]
+    recent = [r for r in rfes if r.get("_days") is not None and r["_days"] <= 14]
+    bands: Dict[str, int] = {}
+    for c in clusters:
+        key = (c.get("band") or {}).get("key", "backlog")
+        bands[key] = bands.get(key, 0) + 1
+
+    stat = lambda v, l: (f'<div class="ps-stat"><div class="ps-stat-v">{v}</div>'
+                         f'<div class="ps-stat-l">{l}</div></div>')
+    stats = "".join([
+        stat(len(rfes), "requests"),
+        stat(len(accounts), "customers"),
+        stat(fmt_arr(arr), "ARR at stake"),
+        stat(len(flagged), "business-impact flags"),
+        stat(len(recent), "opened in 14 days"),
+    ])
+
+    band_order = [("start_now", "Start now"), ("plan", "Plan"),
+                  ("backlog", "Keep in backlog"), ("drop", "Propose closing")]
+    band_cells = "".join(
+        f'<div class="ps-band ps-band-{k}"><span class="ps-mark">{BAND_MARK[k]}</span>'
+        f'<span class="ps-band-n">{bands.get(k, 0)}</span>'
+        f'<span class="ps-band-l">{lbl}</span></div>'
+        for k, lbl in band_order)
+
+    rows = ""
+    for i, c in enumerate(clusters[:8], 1):
+        band = (c.get("band") or {}).get("label", "")
+        rows += (
+            f'<tr><td class="ps-n">{i}</td>'
+            f'<td><strong>{_esc(c["title"])}</strong>'
+            f'<div class="ps-why">{_esc(c.get("why", ""))}</div></td>'
+            f'<td class="ps-c">{int(c.get("score", 0))}<div class="ps-band-t">{_esc(band)}</div></td>'
+            f'<td class="ps-c">{_esc(c.get("severity", "") or "Unset")}</td>'
+            f'<td class="ps-c">{fmt_arr(c.get("arr", 0))}</td>'
+            f'<td class="ps-c">{c.get("customers", len(c.get("accounts", [])))}</td>'
+            f'<td class="ps-c">{len(c["members"])}</td></tr>')
+
+    esc_rows = ""
+    for r in sorted(flagged, key=lambda r: -(r.get("_score") or 0))[:6]:
+        reason = P.business_impact_reason(r)
+        esc_rows += (
+            f'<tr><td class="ps-case">#{_esc(r["case_number"])}</td>'
+            f'<td>{_esc(r["account_name"])}</td>'
+            f'<td class="ps-c">{_esc(r["severity"] or "Unset")}</td>'
+            f'<td class="ps-c">{fmt_arr(r["arr"])}</td>'
+            f'<td>{_esc(r["subject"])}'
+            + (f'<div class="ps-why">Stated impact: {_esc(reason)}</div>' if reason else "")
+            + '</td></tr>')
+
+    esc_block = (
+        '<div class="ps-h2">Business-impact escalations &mdash; each needs an answer</div>'
+        '<table class="ps-table"><thead><tr><th>Case</th><th>Account</th><th>Sev</th>'
+        '<th>ARR</th><th>Request</th></tr></thead><tbody>' + esc_rows + '</tbody></table>'
+    ) if esc_rows else (
+        '<div class="ps-note">No request in this domain carries a customer-stated '
+        'business impact.</div>')
+
+    return f"""<div class="print-sheet" id="print-sheet-{sid}">
+  <div class="ps-head">
+    <div>
+      <div class="ps-title">{emoji} {_esc(name)}</div>
+      <div class="ps-sub">Weekly RFE review &middot; {report_date.strftime('%B %d, %Y')}</div>
+    </div>
+    <div class="ps-brand">Cynet Product</div>
+  </div>
+  <div class="ps-stats">{stats}</div>
+  <div class="ps-h2">What has to be decided</div>
+  <div class="ps-bands">{band_cells}</div>
+  <div class="ps-h2">Themes worth discussing</div>
+  <table class="ps-table ps-themes"><thead><tr>
+    <th>#</th><th>Theme</th><th>PI</th><th>Sev</th><th>ARR</th><th>Cust.</th><th>Cases</th>
+  </tr></thead><tbody>{rows}</tbody></table>
+  {esc_block}
+  <div class="ps-foot">
+    Ranked by PI Priority &mdash; severity, ARR, the Salesforce business-impact flag,
+    how many distinct customers ask, recency and the request subject. ARR counts each
+    account once, however many requests it filed.
+    Generated {report_date.strftime('%Y-%m-%d')} from the Cynet RFE platform.
+  </div>
+</div>"""
+
+
 def _empty_page(message: str) -> str:
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Weekly Analysis</title></head>
@@ -841,6 +1129,23 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
             sorted(by_section.get(sid, []), key=lambda r: -r["_score"]), sid)
         _tick(f"Grouping {SECTION_NAME.get(sid, sid)}…",
               40 + int(30 * (i + 1) / len(DOMAIN_IDS)))
+
+    # Score with the same engine the PI Planning report uses, now that themes
+    # exist and repetition can be measured. This overwrites the provisional
+    # `_score` set above.
+    _tick("Ranking by severity, ARR, business impact and repetition…", 72)
+    score_records(records, clusters_by_section, report_date)
+    for sid in DOMAIN_IDS:
+        # Catch-all last: it is a reading list, not a candidate for commitment.
+        clusters_by_section[sid].sort(
+            key=lambda c: (is_catch_all(c), -c["score"]))
+
+    # One print sheet per domain — hidden on screen, shown only while printing.
+    print_sheets = "".join(
+        _print_sheet(sid, SECTION_NAME[sid], SECTION_EMOJI[sid],
+                     by_section.get(sid, []), clusters_by_section.get(sid, []),
+                     report_date)
+        for sid in DOMAIN_IDS)
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
     nav = []
@@ -988,6 +1293,9 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
     <div class="hero-subtitle">{len(rfes)} request(s) in {len(clusters)} cluster(s) — every case is covered by exactly one cluster.</div>
     <div class="hero-meta">
       <span class="hero-chip chip-count">{len(rfes)} RFEs</span>
+      <button class="pdf-btn" onclick="exportDomainPdf('{sid}')"
+              title="Open your browser's print dialog and choose Save as PDF">
+        &#8681; Export this domain as PDF</button>
       <span class="hero-chip chip-recent">{len(d_recent)} recent</span>
       <span class="hero-chip chip-arr">{fmt_arr(d_arr)} ARR</span>
       <span class="hero-chip chip-high">{len(d_high)} High/Critical</span>
@@ -1027,10 +1335,11 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
     }
 
     _tick("Rendering charts and pages…", 88)
-    return _page_shell(sidebar, "".join(pages), chart_data)
+    return _page_shell(sidebar, "".join(pages), chart_data, print_sheets)
 
 
-def _page_shell(sidebar: str, pages: str, chart_data: Dict[str, Any]) -> str:
+def _page_shell(sidebar: str, pages: str, chart_data: Dict[str, Any],
+                print_sheets: str = "") -> str:
     """Assemble the single-file HTML document. LIGHT MODE ONLY."""
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
@@ -1048,6 +1357,11 @@ def _page_shell(sidebar: str, pages: str, chart_data: Dict[str, Any]) -> str:
 body {{ margin:0; background:var(--bg); color:var(--text);
   font-family:'Inter','Segoe UI',Arial,sans-serif; font-size:14px;
   display:flex; min-height:100vh; }}
+body {{ display:grid; grid-template-columns:250px 1fr;
+        grid-template-areas:"side ctl" "side main"; }}
+#sidebar {{ grid-area:side; }}
+#ctl-bar {{ grid-area:ctl; position:sticky; top:0; z-index:50; }}
+#main {{ grid-area:main; }}
 #sidebar {{ width:250px; min-width:250px; background:#f8faff;
   border-right:1px solid var(--border); position:fixed; top:0; left:0;
   height:100vh; overflow-y:auto; z-index:100; }}
@@ -1210,12 +1524,125 @@ body {{ margin:0; background:var(--bg); color:var(--text);
   display:none; box-shadow:0 4px 12px rgba(37,99,235,.3); }}
 @media (max-width:1100px) {{ .kpi-row {{ grid-template-columns:repeat(2,1fr); }}
   .charts-grid {{ grid-template-columns:1fr; }} }}
+
+/* ── Shared with the PI Planning report (scoring/report_ui.py) ───────────── */
+{report_ui.BAND_CSS}
+{report_ui.FILTER_CSS}
+
+/* PI score chip and the business-impact flag chip on a card */
+.pi-score {{ font-size:10px; font-weight:800; padding:2px 8px; border-radius:10px;
+            background:#eef4ff; color:#1d4ed8; cursor:help; white-space:nowrap; }}
+.chip-flag {{ background:#fee2e2 !important; color:#991b1b !important; font-weight:700; }}
+.rfe-rank-row {{ display:flex; gap:6px; align-items:center; margin:6px 0 2px; flex-wrap:wrap; }}
+.pdf-btn {{ background:#fff; border:1px solid #cbd5e1; color:#334155; font:inherit;
+           font-size:11px; font-weight:600; padding:4px 10px; border-radius:14px;
+           cursor:pointer; margin-left:6px; }}
+.pdf-btn:hover {{ border-color:#2563eb; color:#1d4ed8; }}
+
+/* ── The per-domain one-pager ────────────────────────────────────────────── */
+/* Hidden on screen; the print rules below reveal exactly one of them. */
+.print-sheet {{ display:none; }}
+.ps-head {{ display:flex; justify-content:space-between; align-items:flex-start;
+           border-bottom:2px solid #111827; padding-bottom:8px; margin-bottom:12px; }}
+.ps-title {{ font-size:19px; font-weight:800; color:#111827; }}
+.ps-sub {{ font-size:11px; color:#6b7280; margin-top:2px; }}
+.ps-brand {{ font-size:10px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
+            color:#9ca3af; }}
+.ps-stats {{ display:flex; gap:10px; margin-bottom:14px; }}
+.ps-stat {{ flex:1; border:1px solid #e5e7eb; border-radius:6px; padding:7px 9px; }}
+.ps-stat-v {{ font-size:17px; font-weight:800; color:#111827; line-height:1.1; }}
+.ps-stat-l {{ font-size:9px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280;
+             margin-top:2px; }}
+.ps-h2 {{ font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.7px;
+         color:#374151; margin:14px 0 6px; padding-bottom:3px;
+         border-bottom:1px solid #e5e7eb; }}
+.ps-bands {{ display:flex; gap:8px; }}
+.ps-band {{ flex:1; display:flex; align-items:center; gap:6px; padding:6px 9px;
+           border-radius:6px; border:1px solid #e5e7eb; }}
+.ps-band-start_now {{ background:#eff4ff; border-color:#bfd3ff; }}
+.ps-band-plan {{ background:#f5f0ff; border-color:#ddd0fb; }}
+.ps-mark {{ font-size:10px; color:#4b5563; }}
+.ps-band-n {{ font-size:15px; font-weight:800; color:#111827; }}
+.ps-band-l {{ font-size:10px; color:#4b5563; }}
+.ps-table {{ width:100%; border-collapse:collapse; font-size:10px; }}
+.ps-table th {{ text-align:left; font-size:8.5px; text-transform:uppercase;
+               letter-spacing:.4px; color:#6b7280; border-bottom:1px solid #d1d5db;
+               padding:4px 5px; }}
+.ps-table td {{ padding:5px; border-bottom:1px solid #f0f1f4; vertical-align:top;
+               color:#1f2937; }}
+.ps-table .ps-c {{ text-align:center; white-space:nowrap; }}
+.ps-themes {{ table-layout:fixed; }}
+.ps-themes th:nth-child(1), .ps-themes td:nth-child(1) {{ width:4%; }}
+.ps-themes th:nth-child(2), .ps-themes td:nth-child(2) {{ width:50%; }}
+.ps-themes th:nth-child(3), .ps-themes td:nth-child(3) {{ width:9%; }}
+.ps-themes th:nth-child(4), .ps-themes td:nth-child(4) {{ width:11%; }}
+.ps-themes th:nth-child(5), .ps-themes td:nth-child(5) {{ width:11%; }}
+.ps-themes th:nth-child(6), .ps-themes td:nth-child(6) {{ width:8%; }}
+.ps-themes th:nth-child(7), .ps-themes td:nth-child(7) {{ width:7%; }}
+.print-sheet {{ max-width:186mm; }}
+.ps-n {{ color:#9ca3af; font-weight:700; width:16px; }}
+.ps-case {{ font-family:ui-monospace,Consolas,monospace; white-space:nowrap; }}
+.ps-why {{ font-size:9px; color:#6b7280; margin-top:2px; line-height:1.4; }}
+.ps-band-t {{ font-size:8px; color:#6b7280; }}
+.ps-note {{ font-size:10px; color:#6b7280; font-style:italic; padding:6px 0; }}
+.ps-foot {{ margin-top:14px; padding-top:7px; border-top:1px solid #e5e7eb;
+           font-size:8.5px; color:#9ca3af; line-height:1.5; }}
+
+@media print {{
+  @page {{ size:A4 portrait; margin:12mm; }}
+  /* The screen layout is a grid with a 250px sidebar column. Leaving it in
+     place put the whole sheet inside that column; the sheet needs the page. */
+  body {{ background:#fff !important; display:block !important; }}
+  /* Everything interactive is left out of the PDF on purpose. */
+  #sidebar, #main, #ctl-bar, .toast, #tip, .pdf-btn {{ display:none !important; }}
+  .print-sheet.printing {{ display:block !important; }}
+  .ps-table {{ page-break-inside:auto; }}
+  .ps-table tr {{ page-break-inside:avoid; }}
+}}
 </style></head>
 <body>
 {sidebar}
+<div id="ctl-bar"></div>
 <div id="main">{pages}</div>
+<div id="print-area">{print_sheets}</div>
 <div class="toast" id="toast">Copied to clipboard</div>
 <script>
+{report_ui.BAND_JS}
+{report_ui.FILTER_JS}
+
+/* Filters and sorting act on the cards this report renders in Python:
+   a theme is `.request-card`, a request inside it is `.rfe-card`. */
+var WEEKLY_FILTER_CFG = {{
+  sectionSel: '.section-page', groupSel: '.request-card', rowSel: '.rfe-card'
+}};
+
+/** Export one domain as a PDF through the browser's own print dialog.
+ *  The screen layout is never printed — a sheet built for the page is. */
+function exportDomainPdf(sid) {{
+  var sheet = document.getElementById('print-sheet-' + sid);
+  if (!sheet) {{
+    alert('This domain has no requests in the current dataset, so there is nothing to export.');
+    return;
+  }}
+  document.querySelectorAll('.print-sheet').forEach(function (el) {{
+    el.classList.remove('printing');
+  }});
+  sheet.classList.add('printing');
+  var done = function () {{
+    sheet.classList.remove('printing');
+    window.removeEventListener('afterprint', done);
+  }};
+  window.addEventListener('afterprint', done);
+  window.print();
+  // Safari and some embedded viewers never fire afterprint.
+  setTimeout(done, 60000);
+}}
+
+document.addEventListener('DOMContentLoaded', function () {{
+  initTips();
+  renderControlBar('ctl-bar', WEEKLY_FILTER_CFG);
+}});
+
 var CHART = {json.dumps(chart_data)};
 var LIGHT = {{
   paper_bgcolor:'transparent', plot_bgcolor:'transparent',

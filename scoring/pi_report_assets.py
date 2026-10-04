@@ -44,6 +44,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from scoring import report_ui
+
 EMPTY_REPORT = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>PI Planning Report</title></head>
 <body style="font-family:'Segoe UI',Arial,sans-serif;padding:48px;text-align:center;color:#6b7280;background:#f7f8fa">
@@ -169,36 +171,7 @@ body{background:var(--bg);color:var(--text);font-family:"Segoe UI",Arial,sans-se
 .pill.flag{background:#fee2e2;color:#991b1b}
 .pill.age{background:#f1f5f9;color:var(--slate)}
 
-/* Decision badges carry a shape as well as a colour, so the four bands stay
-   distinguishable in greyscale, in print, and to a colour-blind reader — and
-   every one of them explains itself on hover. */
-.band{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;
-      padding:2px 9px 2px 7px;border-radius:10px;color:#fff;white-space:nowrap;cursor:help;
-      border:1px solid transparent}
-.band .mark{font-size:9px;line-height:1}
-.band.start_now{background:var(--band-start)}
-.band.plan{background:var(--band-plan)}
-.band.backlog{background:#eef1f6;color:#3f4a5a;border-color:#cbd3e0}
-.band.drop{background:#fff;color:#6b7280;border-color:#d7dce5;border-style:dashed}
-.band:hover{filter:brightness(1.06)}
-.band.backlog:hover,.band.drop:hover{filter:none;border-color:var(--accent);color:var(--accent-dark)}
-
-/* Key strip: the four bands, spelled out, above the first thing that uses them. */
-.band-key{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px;
-          padding:9px 12px;background:var(--card);border:1px solid var(--border);
-          border-radius:9px;box-shadow:var(--shadow)}
-.band-key .kl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
-              color:var(--muted);margin-right:2px}
-.band-key .item{display:flex;align-items:center;gap:6px;font-size:11px;color:#4b5563}
-.band-key .item .what{color:var(--muted)}
-
-#tip{position:absolute;z-index:900;max-width:330px;background:#111827;color:#f9fafb;
-     font-size:11.5px;line-height:1.55;padding:9px 11px;border-radius:7px;
-     box-shadow:0 6px 20px rgba(17,24,39,.22);pointer-events:none;opacity:0;
-     transition:opacity .12s;display:none}
-#tip.on{opacity:1;display:block}
-#tip b{color:#fff}
-[data-tip]{cursor:help}
+%%BAND_CSS%%
 
 .sev{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;white-space:nowrap}
 .sev.critical{background:#7f1d1d;color:#fff}
@@ -308,78 +281,7 @@ const BAND_COLOR = {start_now: '#1d4ed8', plan: '#7c3aed', backlog: '#64748b', d
 const BAND_LABEL = {};
 M.meta.bands.forEach(b => { BAND_LABEL[b.key] = b.label; });
 
-/* The decision bands, with the shape that identifies each one and the sentence
-   it shows on hover. The explanations name the thresholds AND the floors,
-   because "why is this Critical single-customer request in Plan?" is the first
-   question a reader asks of the badge. */
-const BAND_META = {
-  start_now: {mark: '\u25b6', label: 'Start now', action: 'Commit to this PI',
-    tip: 'Score 68 or above. Carried by more than one signal at once \u2014 severity, ARR, ' +
-         'repeat demand across customers, or a business impact the customer stated. ' +
-         'These are the themes to write epics for in this meeting.'},
-  plan: {mark: '\u25c6', label: 'Plan', action: 'Size now, commit next PI',
-    tip: 'Score 54 to 67 \u2014 or lifted here because severity is Critical, or because the ' +
-         'customer wrote down the business consequence. Real signal, not yet enough to ' +
-         'displace the commit list. Size it now so the next PI opens with it understood.'},
-  backlog: {mark: '\u25a0', label: 'Keep in backlog', action: 'Revisit next cycle',
-    tip: 'Score 38 to 53 \u2014 or lifted here because a customer flagged business impact, ' +
-         'because 1M dollars or more of ARR sits behind it, or because a second customer ' +
-         'has asked. Worth keeping and re-reading next cycle; not worth capacity now.'},
-  drop: {mark: '\u25cb', label: 'Drop candidate', action: 'Propose closing with the customer',
-    tip: 'Below 38: one customer, no business-impact flag, limited severity and limited ARR ' +
-         'behind it. A proposal to close with the requesting customer \u2014 not an ' +
-         'instruction, and never applied to anything the floors protect.'}
-};
-
-/** A decision badge: shape, label, and its explanation on hover. */
-function bandBadge(key) {
-  const m = BAND_META[key];
-  if (!m) return '';
-  return '<span class="band ' + key + '" data-tip="<b>' + m.label + ' \u2014 ' + m.action +
-         '</b><br>' + m.tip + '">' +
-         '<span class="mark">' + m.mark + '</span>' + m.label + '</span>';
-}
-
-/** The key strip shown above the first thing on a page that uses the bands. */
-function bandKey() {
-  return '<div class="band-key"><span class="kl">Decision bands</span>' +
-    ['start_now', 'plan', 'backlog', 'drop'].map(k =>
-      '<span class="item">' + bandBadge(k) +
-      '<span class="what">' + BAND_META[k].action + '</span></span>').join('') +
-    '</div>';
-}
-
-/* One floating tooltip, appended to the body, so an explanation is never clipped
-   by a table's horizontal scroll container the way a CSS ::after tooltip is. */
-function initTips() {
-  let el = document.getElementById('tip');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'tip';
-    document.body.appendChild(el);
-  }
-  const show = ev => {
-    const host = ev.target.closest && ev.target.closest('[data-tip]');
-    if (!host) return;
-    el.innerHTML = host.getAttribute('data-tip');
-    el.classList.add('on');
-    const r = host.getBoundingClientRect();
-    const w = el.offsetWidth, h = el.offsetHeight;
-    let left = r.left + window.scrollX + r.width / 2 - w / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
-    let top = r.top + window.scrollY - h - 9;
-    if (top < window.scrollY + 4) top = r.bottom + window.scrollY + 9;   // flip under
-    el.style.left = left + 'px';
-    el.style.top = top + 'px';
-  };
-  const hide = ev => {
-    if (ev.target.closest && ev.target.closest('[data-tip]')) el.classList.remove('on');
-  };
-  document.addEventListener('mouseover', show);
-  document.addEventListener('mouseout', hide);
-  document.addEventListener('click', () => el.classList.remove('on'));
-}
-
+%%BAND_JS%%
 const RECORDS = {};
 M.records.forEach(r => { RECORDS[r.case] = r; });
 
@@ -1419,6 +1321,12 @@ repetition, recency and request subject) &middot; PM decision summaries written 
 <script>/*__JS__*/</script>
 </body>
 </html>"""
+
+
+# The band badges, their explanations and the tooltip engine are shared with the
+# Weekly Analysis report so the two cannot drift apart. See scoring/report_ui.py.
+CSS = CSS.replace("%%BAND_CSS%%", report_ui.BAND_CSS)
+JS = JS.replace("%%BAND_JS%%", report_ui.BAND_JS)
 
 
 def render(model: Dict[str, Any]) -> str:

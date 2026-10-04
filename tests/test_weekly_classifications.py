@@ -1,0 +1,263 @@
+"""The Weekly Analysis report classifies on the same dimensions as PI Planning.
+
+A PM reads both reports about the same backlog in the same week. If the weekly
+report calls a request a drop candidate while the PI report has it in Plan, the
+reader is right to distrust both — so these tests are mostly about the two
+reports agreeing, and about the ways that agreement was quietly broken before.
+"""
+import re
+import sqlite3
+import sys
+import os
+from datetime import datetime, timedelta
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from scoring import weekly_report_generator as W
+from scoring import pi_report_generator as G
+from scoring import priority as P
+from scoring import report_ui
+
+RUN = "report-weekly-test"
+NOW = datetime(2026, 9, 10)
+
+DESC = ("The customer explains that the console offers no way to export this "
+        "view, so every review is retyped into a spreadsheet before it can be "
+        "shared with their security team at the weekly meeting.")
+
+
+def _row(case, subject, *, account="Acme GmbH", arr=150_000.0, severity="Medium",
+         domain="Endpoint", sub_domain="Endpoint Protection", days=5, bi=0, reason=""):
+    return (RUN, case, subject, DESC, account, arr, "Added to Backlog", domain,
+            sub_domain, severity, (NOW - timedelta(days=days)).strftime("%Y-%m-%d"),
+            NOW.isoformat(), bi, reason, "Amir Olswang", "USD")
+
+
+@pytest.fixture
+def db(tmp_path):
+    path = str(tmp_path / "weekly.db")
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE rfe_pulls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, case_number TEXT,
+        subject TEXT, description TEXT, account_name TEXT, account_arr REAL,
+        status TEXT, domain TEXT, sub_domain TEXT, severity TEXT,
+        created_date TEXT, pulled_at TEXT, business_impact INTEGER,
+        business_impact_reason TEXT, case_owner TEXT, arr_currency TEXT)""")
+    conn.execute("CREATE TABLE run_meta (run_id TEXT, started_at TEXT, rfe_count INTEGER, "
+                 "status TEXT, source TEXT)")
+    rows = [
+        _row("00600001", "Antivirus scan for Linux endpoints", account="Acme GmbH"),
+        _row("00600002", "AV scan on Linux endpoints", account="Globex srl", arr=90_000),
+        _row("00600003", "Antivirus scanning for Linux hosts", account="Initech", arr=60_000),
+        _row("00600004", "Block transfer of sensitive data", severity="Critical",
+             account="Umbrella AG", arr=185_000, bi=1, reason="Raised by their auditor"),
+        _row("00600005", "Rename the Hosts tab", severity="Low", account="Tiny Ltd",
+             arr=0, days=900),
+        _row("00600006", "Scheduled executive report by site", sub_domain="Reporting",
+             account="Verxo srl", arr=151_000),
+        _row("00600007", "CLM log collection for syslog sources", domain="SIEM",
+             sub_domain="SIEM / CLM", account="Lantech", arr=310_000),
+    ]
+    conn.executemany(
+        "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
+        "account_arr,status,domain,sub_domain,severity,created_date,pulled_at,"
+        "business_impact,business_impact_reason,case_owner,arr_currency) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.commit(); conn.close()
+    return path
+
+
+@pytest.fixture
+def html(db):
+    return W.generate_report(db, RUN)
+
+
+def _prepare(db):
+    """Run the generator's own pre-pass, then cluster and score.
+
+    Mirrors generate_report: a provisional score exists before clustering
+    (build_clusters orders members by it), and score_records overwrites it with
+    the shared PI Priority afterwards.
+    """
+    records, _meta = W.load_rfes(db, RUN)
+    report_date, _retro = W.report_date_for(records)
+    for r in records:
+        r["_days"] = (report_date - r["opened"]).days if r["opened"] else 999
+        r["_score"] = W.priority_score(r, report_date)
+        r["_trend"] = W.trend_of(r["_days"])
+        r["_recent"] = r["_days"] <= 14
+        r["_section"] = W.classify_section(r["sf_domain"], r["subject"], r["description"])
+    clusters = {sid: W.build_clusters(
+                    sorted([r for r in records if r["_section"] == sid],
+                           key=lambda r: -r["_score"]), sid)
+                for sid in W.DOMAIN_IDS}
+    W.score_records(records, clusters, report_date)
+    return records, clusters, report_date
+
+
+# ── The data the classifications need ───────────────────────────────────────
+
+def test_weekly_reads_the_business_impact_columns(db):
+    records, _ = W.load_rfes(db, RUN)
+    flagged = [r for r in records if P.is_business_impact(r)]
+    assert len(flagged) == 1
+    assert P.business_impact_reason(flagged[0]) == "Raised by their auditor"
+
+
+def test_unknown_severity_is_not_rewritten_as_low(db):
+    """It used to be coerced to 'Low', a claim the data does not make."""
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE rfe_pulls SET severity='' WHERE case_number='00600005'")
+    conn.commit(); conn.close()
+    records, _ = W.load_rfes(db, RUN)
+    rec = [r for r in records if r["case_number"] == "00600005"][0]
+    assert rec["severity"] != "Low"
+    assert P.normalise_severity(rec["severity"]) == ""
+
+
+def test_report_survives_a_database_without_the_v2_columns(tmp_path):
+    """A report built before the migration must degrade, not fail."""
+    path = str(tmp_path / "old.db")
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE rfe_pulls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, case_number TEXT,
+        subject TEXT, description TEXT, account_name TEXT, account_arr REAL,
+        status TEXT, domain TEXT, sub_domain TEXT, severity TEXT,
+        created_date TEXT, pulled_at TEXT)""")
+    conn.execute("CREATE TABLE run_meta (run_id TEXT, started_at TEXT, "
+                 "rfe_count INTEGER, status TEXT, source TEXT)")
+    conn.execute("INSERT INTO rfe_pulls (run_id,case_number,subject,description,"
+                 "account_name,account_arr,status,domain,sub_domain,severity,"
+                 "created_date,pulled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (RUN, "00600099", "Export the activity view", DESC, "Acme", 10_000.0,
+                  "Added to Backlog", "Endpoint", "Endpoint Protection", "Medium",
+                  "2026-08-01", NOW.isoformat()))
+    conn.commit(); conn.close()
+    out = W.generate_report(path, RUN)
+    assert "Cynet Weekly Analysis" in out
+
+
+# ── The same engine, the same answers ───────────────────────────────────────
+
+def test_weekly_scores_with_the_shared_engine(db):
+    records, clusters, report_date = _prepare(db)
+    for r in records:
+        assert 0 <= r["_score"] <= 100, "weekly must use the 0-100 PI Priority scale"
+        assert r["_band"]["key"] in ("start_now", "plan", "backlog", "drop")
+        assert r["_why"].strip()
+
+
+def test_both_reports_agree_on_the_same_request(db):
+    """The point of sharing scoring/priority.py, asserted rather than assumed."""
+    model = G.build_model(db, RUN, now=NOW)
+    pi = model["tf"]["all"]["scores"]
+
+    records, clusters, report_date = _prepare(db)
+    weekly = {r["case_number"]: r for r in records}
+
+    common = [c for c in pi if c in weekly]
+    assert common
+    agree = sum(1 for c in common if pi[c]["band"] == weekly[c]["_band"]["key"])
+    assert agree == len(common), (
+        "every request must land in the same decision band in both reports; "
+        + ", ".join(f"{c}: PI {pi[c]['band']} vs weekly {weekly[c]['_band']['key']}"
+                    for c in common if pi[c]["band"] != weekly[c]["_band"]["key"]))
+
+
+def test_repetition_is_measured_in_the_same_partition(db):
+    """Repetition used to be read off the weekly's own broad thematic areas, so
+    one case read '17 customers' there and '2' in the PI report."""
+    model = G.build_model(db, RUN, now=NOW)
+    pi = model["tf"]["all"]["scores"]
+    records, clusters, report_date = _prepare(db)
+    for r in records:
+        if r["case_number"] in pi:
+            assert r["_customers"] == pi[r["case_number"]]["customers"], r["case_number"]
+
+
+# ── The catch-all bucket ────────────────────────────────────────────────────
+
+def test_catch_all_is_recognised():
+    assert W.is_catch_all({"title": "Other Requests in this Domain"})
+    assert not W.is_catch_all({"title": "AV Scan — macOS & Linux"})
+
+
+def test_catch_all_gets_no_breadth_credit(db):
+    """It collected 25 customers in EPP and became the top-ranked theme."""
+    records, clusters, report_date = _prepare(db)
+    for sid, cs in clusters.items():
+        for c in cs:
+            if W.is_catch_all(c):
+                members = c["members"]
+                assert all(m["_customers"] <= 1 or
+                           m["_customers"] < len(c["accounts"]) for m in members)
+
+
+# ── The page ────────────────────────────────────────────────────────────────
+
+def test_the_five_controls_are_present(html):
+    for label in ("Sort by", "Severity", "Business impact", "ARR",
+                  "Repetition", "Timeframe"):
+        assert ">" + label + "<" in html, label
+    for option in ("Flagged only", "$1M and above", "2+ customers", "Last 3 months"):
+        assert option in html
+
+
+def test_cards_carry_the_filter_attributes(html):
+    assert 'data-sev="' in html and 'data-bi="' in html
+    assert 'data-arr="' in html and 'data-cust="' in html
+    assert 'data-score="' in html and 'data-days="' in html
+
+
+def test_badges_match_the_pi_report_exactly(html):
+    """Same shapes, same labels, same explanations — one source, two pages."""
+    from scoring import pi_report_assets as A
+    assert report_ui.BAND_JS in html
+    assert report_ui.BAND_JS in A.JS
+    for mark in ("▶", "◆", "■", "○"):
+        assert mark in html
+    for label in ("Start now", "Plan", "Keep in backlog", "Drop candidate"):
+        assert label in html
+
+
+def test_shared_filter_engine_is_injected(html):
+    assert report_ui.FILTER_JS in html
+    assert "renderControlBar('ctl-bar'" in html
+
+
+# ── The per-domain PDF ──────────────────────────────────────────────────────
+
+def test_every_domain_with_requests_gets_a_print_sheet(html):
+    assert 'class="print-sheet"' in html
+    assert "exportDomainPdf(" in html
+    assert 'id="print-sheet-epp"' in html
+
+
+def test_print_sheet_has_the_one_pager_blocks(html):
+    sheet = html[html.index('id="print-sheet-epp"'):]
+    sheet = sheet[:sheet.index("</div>\n<div class=\"print-sheet\"")] if \
+        "</div>\n<div class=\"print-sheet\"" in sheet else sheet[:20000]
+    for block in ("What has to be decided", "Themes worth discussing",
+                  "Weekly RFE review", "ARR at stake"):
+        assert block in sheet, block
+
+
+def test_print_sheet_is_hidden_on_screen(html):
+    assert ".print-sheet { display:none; }" in html.replace("  ", " ") or \
+           ".print-sheet {{ display:none; }}" in html or \
+           re.search(r"\.print-sheet\s*\{\s*display:none", html)
+
+
+def test_printing_does_not_inherit_the_sidebar_grid(html):
+    """The screen layout is a grid with a 250px sidebar column; leaving it in
+    place printed the whole sheet inside that column."""
+    assert "display:block !important" in html
+    assert "@page" in html and "A4 portrait" in html
+
+
+def test_interactive_chrome_is_left_out_of_the_pdf(html):
+    print_block = html[html.index("@media print"):]
+    for hidden in ("#sidebar", "#main", "#ctl-bar", ".pdf-btn"):
+        assert hidden in print_block, hidden
