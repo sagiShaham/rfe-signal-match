@@ -593,7 +593,7 @@ def build_clusters(rfes: List[Dict[str, Any]], section: str) -> List[Dict[str, A
     clusters = []
     for title, members in buckets.items():
         members.sort(key=lambda r: -r["_score"])
-        arr_total = sum(m["arr"] for m in members)
+        arr_total = P.distinct_account_arr(members)
         accounts = sorted({m["account_name"] for m in members})
         # SEV_WEIGHT has no entry for an unset severity; scoring it 1 would
         # rank it level with Low, so it is ranked below everything that is set.
@@ -786,6 +786,8 @@ def _rfe_card(rfe: Dict[str, Any]) -> str:
     flag_chip = ('<span class="chip chip-flag" title="Business impact stated by the '
                  'customer">&#9873; Business impact</span>' if flagged else "")
     return f"""<div class="rfe-card" data-sev="{sev_key}" data-bi="{1 if flagged else 0}"
+     data-case="{cn}" data-acct="{_esc(rfe['account_name'])}"
+     data-section="{_esc(rfe.get('_section', ''))}"
      data-arr="{int(rfe['arr'] or 0)}" data-cust="{rfe.get('_customers', 1)}"
      data-reqs="{rfe.get('_requests', 1)}" data-score="{pi.get('score', 0)}"
      data-days="{'' if days is None or days >= 999 else days}">
@@ -838,6 +840,7 @@ def _cluster_row(cluster: Dict[str, Any], rank: int, section: str) -> str:
     ages = [m.get("_days") for m in cluster["members"]
             if m.get("_days") is not None and m.get("_days") < 999]
     return f"""<div class="request-card" data-sev="{sev_key}"
+     data-title="{_esc(cluster['title'])}" data-section="{_esc(section)}"
      data-bi="{1 if cluster.get('flagged') else 0}"
      data-arr="{int(cluster.get('arr') or 0)}" data-cust="{cluster.get('customers', n_acct)}"
      data-reqs="{n_cases}" data-score="{pi.get('score', cluster.get('score', 0))}"
@@ -867,38 +870,6 @@ def _cluster_row(cluster: Dict[str, Any], rank: int, section: str) -> str:
 </div>"""
 
 
-def _kpi_row(items: List[Tuple[str, str, str]]) -> str:
-    cells = "".join(
-        f'<div class="kpi-card"><div class="kpi-val {cls}">{_esc(val)}</div>'
-        f'<div class="kpi-label">{_esc(label)}</div></div>'
-        for val, label, cls in items
-    )
-    return f'<div class="kpi-row">{cells}</div>'
-
-
-def _risk_table(rfes: List[Dict[str, Any]], limit: int = 10) -> str:
-    by_acct: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for r in rfes:
-        by_acct[r["account_name"]].append(r)
-    rows_data = []
-    for acct, items in by_acct.items():
-        arr = max(i["arr"] for i in items)
-        high = sum(1 for i in items if i["severity"] in ("High", "Critical"))
-        if arr > 100_000 or high > 0 or len(items) >= 2:
-            rows_data.append((acct, arr, len(items), high, items))
-    rows_data.sort(key=lambda t: (-t[1], -t[2]))
-    if not rows_data:
-        return '<div class="muted">No at-risk accounts in this domain.</div>'
-    body = "".join(
-        f"<tr><td>{_esc(a)}</td><td>{fmt_arr(arr)}</td><td>{n}</td><td>{h}</td>"
-        f"<td>{', '.join('#' + _esc(i['case_number']) for i in items[:3])}</td></tr>"
-        for a, arr, n, h, items in rows_data[:limit]
-    )
-    return (f'<table class="risk-table"><thead><tr><th>Account</th><th>ARR</th>'
-            f'<th>RFEs</th><th>High/Critical</th><th>Cases</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
-
-
 def _actions_list(items: List[str]) -> str:
     body = "".join(
         f'<div class="action-item"><div class="action-num">{i}</div>'
@@ -917,7 +888,7 @@ def _domain_bullets(section: str, rfes: List[Dict[str, Any]],
                     clusters: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
     """6–7 PM-sharp bullets naming specific case numbers."""
     out: List[Tuple[str, str]] = []
-    total_arr = sum(r["arr"] for r in rfes)
+    total_arr = P.distinct_account_arr(rfes)
     highs = [r for r in rfes if r["severity"] in ("High", "Critical")]
     recent = [r for r in rfes if r["_days"] <= 14]
     top = sorted(rfes, key=lambda r: -r["_score"])[:3]
@@ -1015,7 +986,14 @@ def _print_sheet(sid: str, name: str, emoji: str, rfes: List[Dict[str, Any]],
         for k, lbl in band_order)
 
     rows = ""
-    for i, c in enumerate(clusters[:8], 1):
+    # The executive sheet carries a domain label on every row and the whole
+    # report's escalations, so it takes fewer rows to stay on one A4 page —
+    # at 8 and 6 it measured exactly 1.00 pages, with no room for print
+    # rendering to differ from screen. Catch-all buckets are never listed as
+    # "themes worth discussing": they are what was left once themes were found.
+    theme_limit, escalation_limit = (7, 5) if sid == "exec" else (8, 6)
+    themes = [c for c in clusters if not is_catch_all(c)]
+    for i, c in enumerate(themes[:theme_limit], 1):
         band = (c.get("band") or {}).get("label", "")
         rows += (
             f'<tr><td class="ps-n">{i}</td>'
@@ -1028,7 +1006,7 @@ def _print_sheet(sid: str, name: str, emoji: str, rfes: List[Dict[str, Any]],
             f'<td class="ps-c">{len(c["members"])}</td></tr>')
 
     esc_rows = ""
-    for r in sorted(flagged, key=lambda r: -(r.get("_score") or 0))[:6]:
+    for r in sorted(flagged, key=lambda r: -(r.get("_score") or 0))[:escalation_limit]:
         reason = P.business_impact_reason(r)
         esc_rows += (
             f'<tr><td class="ps-case">#{_esc(r["case_number"])}</td>'
@@ -1070,6 +1048,33 @@ def _print_sheet(sid: str, name: str, emoji: str, rfes: List[Dict[str, Any]],
     Generated {report_date.strftime('%Y-%m-%d')} from the Cynet RFE platform.
   </div>
 </div>"""
+
+
+def _pdf_button(sid: str, name: str) -> str:
+    """The export button, sitting in the hero — above the filter bar, so it
+    exports the whole section, which is what the label says it does.
+
+    It used to be a small white pill between the stat chips and read as one of
+    them; it was missed in review. It is now a real button, pinned top-right.
+    """
+    what = "the whole report" if sid == "exec" else "this domain"
+    return (f'<button class="pdf-btn" onclick="exportDomainPdf(\'{sid}\')" '
+            f'title="Opens your browser\'s print dialog &mdash; choose Save as PDF. '
+            f'Exports {what}, all requests, as a one-page summary.">'
+            f'<span class="pdf-ico">&#128196;</span> Export {_esc(what)} as PDF</button>')
+
+
+def _tam_chase(rfes: List[Dict[str, Any]]) -> str:
+    """'Chase the TAM for descriptions on #1, #2, #3 and 4 more.'
+
+    Replaces a list that was cut at 120 characters, which could stop part-way
+    through a case number and silently drop the rest.
+    """
+    cases = ["#" + r["case_number"] for r in rfes if len(r["description"]) <= 20]
+    shown = cases[:5]
+    tail = f" and {len(cases) - 5} more" if len(cases) > 5 else ""
+    return ("Chase the TAM for descriptions on " + ", ".join(shown) + tail +
+            " — they cannot be routed until someone says what they are asking for.")
 
 
 def _empty_page(message: str) -> str:
@@ -1140,8 +1145,16 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
         clusters_by_section[sid].sort(
             key=lambda c: (is_catch_all(c), -c["score"]))
 
-    # One print sheet per domain — hidden on screen, shown only while printing.
-    print_sheets = "".join(
+    # One print sheet per domain — hidden on screen, shown only while printing —
+    # plus one for the whole report. Catch-all buckets are left out of the
+    # portfolio theme list: they are reading lists, not themes.
+    portfolio_themes = sorted(
+        [dict(c, title=f"{c['title']} \u00b7 {SECTION_NAME[sid]}")
+         for sid in DOMAIN_IDS for c in clusters_by_section.get(sid, [])
+         if not is_catch_all(c)],
+        key=lambda c: -c.get("score", 0))
+    print_sheets = _print_sheet("exec", "Executive Overview", "\U0001F3E0", records,
+                                portfolio_themes, report_date) + "".join(
         _print_sheet(sid, SECTION_NAME[sid], SECTION_EMOJI[sid],
                      by_section.get(sid, []), clusters_by_section.get(sid, []),
                      report_date)
@@ -1170,19 +1183,11 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
 </div>"""
 
     # ── Executive page ───────────────────────────────────────────────────────
-    total_arr = sum(r["arr"] for r in records)
+    total_arr = P.distinct_account_arr(records)
     recent_all = [r for r in records if r["_recent"]]
     highs_all = [r for r in records if r["severity"] in ("High", "Critical")]
-    top_arr = max((r["arr"] for r in records), default=0)
     decided = [r for r in records if r["decision"]]
 
-    exec_kpis = _kpi_row([
-        (str(len(records)), "Total RFEs", "blue"),
-        (str(len(recent_all)), "Filed ≤ 14 Days", "teal"),
-        (str(len(highs_all)), "High / Critical", "red"),
-        (fmt_arr(total_arr), "Total ARR", "green"),
-        (fmt_arr(top_arr), "Top Single-RFE ARR", "yellow"),
-    ])
 
     sec_sorted = sorted(DOMAIN_IDS, key=lambda s: -len(by_section.get(s, [])))
     top_overall = sorted(records, key=lambda r: -r["_score"])[:5]
@@ -1205,23 +1210,12 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
          f"Salesforce description; the rest are flagged for TAM follow-up before routing.", "danger"),
     ]
 
-    domain_cards = "".join(
-        f'<div class="domain-card" onclick="showSection(\'{sid}\')">'
-        f'<div class="domain-card-emoji">{SECTION_EMOJI[sid]}</div>'
-        f'<div class="domain-card-name">{_esc(SECTION_NAME[sid])}</div>'
-        f'<div class="domain-card-stats">'
-        f'<div class="domain-stat">RFEs <span>{len(by_section.get(sid, []))}</span></div>'
-        f'<div class="domain-stat">ARR <span>{fmt_arr(sum(r["arr"] for r in by_section.get(sid, [])))}</span></div>'
-        f'<div class="domain-stat">Clusters <span>{len(clusters_by_section.get(sid, []))}</span></div>'
-        f'</div>'
-        f'<div class="domain-card-top">Top: '
-        f'<span>{("#" + sorted(by_section[sid], key=lambda r: -r["_score"])[0]["case_number"]) if by_section.get(sid) else "—"}</span></div>'
-        f'</div>'
-        for sid in DOMAIN_IDS
-    )
+    # Domain overview cards are rendered in the page from the requests the
+    # filters leave visible (renderLive), so their counts follow the filters.
 
     exec_page = f"""<div class="section-page active" id="section-exec">
   <div class="hero hero-exec">
+    {_pdf_button("exec", "Executive Overview")}
     <div class="hero-title">\U0001F3E0 Executive Overview</div>
     <div class="hero-subtitle">Decide which state each RFE should be assigned — backlog, out of scope, deferred, or needs more information.</div>
     <div class="hero-meta">
@@ -1231,17 +1225,20 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
       <span class="hero-chip chip-high">{len(highs_all)} High/Critical</span>
     </div>
   </div>
-  {exec_kpis}
+  <div class="overview-label">Report overview &mdash; all {len(records)} requests, not affected by the filters</div>
   <div class="card"><div class="card-title">Executive Summary</div>{_summary_list(exec_bullets)}</div>
+  <div class="filter-slot" data-total="{len(records)}"></div>
+  <div class="live" data-live="kpis" data-scope="all"></div>
   <div class="card"><div class="card-title">Domain Overview — click to open</div>
-    <div class="domain-grid">{domain_cards}</div></div>
+    <div class="domain-grid live" data-live="domains" data-scope="all"></div></div>
   <div class="charts-grid">
-    <div class="chart-container"><div id="chart-count"></div></div>
-    <div class="chart-container"><div id="chart-arr"></div></div>
-    <div class="chart-container"><div id="chart-sev"></div></div>
-    <div class="chart-container"><div id="chart-recent"></div></div>
+    <div class="chart-container live-chart"><div id="chart-count"></div></div>
+    <div class="chart-container live-chart"><div id="chart-arr"></div></div>
+    <div class="chart-container live-chart"><div id="chart-sev"></div></div>
+    <div class="chart-container live-chart"><div id="chart-recent"></div></div>
   </div>
-  <div class="card"><div class="card-title">Global At-Risk Accounts</div>{_risk_table(records)}</div>
+  <div class="card"><div class="card-title">Global At-Risk Accounts</div>
+    <div class="live" data-live="risk" data-scope="all"></div></div>
 </div>"""
 
     # ── Domain pages ─────────────────────────────────────────────────────────
@@ -1257,17 +1254,9 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
             continue
 
         clusters = clusters_by_section[sid]
-        d_arr = sum(r["arr"] for r in rfes)
+        d_arr = P.distinct_account_arr(rfes)
         d_recent = [r for r in rfes if r["_recent"]]
         d_high = [r for r in rfes if r["severity"] in ("High", "Critical")]
-        d_accts = {r["account_name"] for r in rfes}
-        kpis = _kpi_row([
-            (str(len(rfes)), "Total", "blue"),
-            (str(len(d_recent)), "Last 14 Days", "teal"),
-            (str(len(d_high)), "High / Critical", "red"),
-            (fmt_arr(d_arr), "ARR at Stake", "green"),
-            (str(len(d_accts)), "Unique Accounts", "yellow"),
-        ])
         cluster_rows = "".join(
             _cluster_row(c, i, sid) for i, c in enumerate(clusters, 1))
         actions = [
@@ -1277,8 +1266,7 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
              f"({', '.join('#' + r['case_number'] for r in d_high[:3])}) to engineering "
              f"triage this week." if d_high else
              "No High/Critical requests here — this domain can be triaged at normal cadence."),
-            (f"Chase the TAM for descriptions on "
-             f"{', '.join('#' + r['case_number'] for r in rfes if len(r['description']) <= 20)[:120]}"
+            (_tam_chase(rfes)
              if any(len(r["description"]) <= 20 for r in rfes) else
              "All requests here have descriptions — no TAM follow-up needed."),
             f"Confirm the {len(clusters)} clusters match how engineering would scope the work; "
@@ -1289,34 +1277,35 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
         bubble_id = f"bubble-{sid}"
         pages.append(f"""<div class="section-page" id="section-{sid}">
   <div class="hero hero-{sid}">
+    {_pdf_button(sid, name)}
     <div class="hero-title">{emoji} {_esc(name)}</div>
     <div class="hero-subtitle">{len(rfes)} request(s) in {len(clusters)} cluster(s) — every case is covered by exactly one cluster.</div>
     <div class="hero-meta">
       <span class="hero-chip chip-count">{len(rfes)} RFEs</span>
-      <button class="pdf-btn" onclick="exportDomainPdf('{sid}')"
-              title="Open your browser's print dialog and choose Save as PDF">
-        &#8681; Export this domain as PDF</button>
       <span class="hero-chip chip-recent">{len(d_recent)} recent</span>
       <span class="hero-chip chip-arr">{fmt_arr(d_arr)} ARR</span>
       <span class="hero-chip chip-high">{len(d_high)} High/Critical</span>
     </div>
   </div>
-  {kpis}
+  <div class="overview-label">Section overview &mdash; all {len(rfes)} requests in {_esc(name)}, not affected by the filters</div>
   <div class="card"><div class="card-title">Executive Summary</div>
     {_summary_list(_domain_bullets(sid, rfes, clusters))}</div>
+  <div class="card"><div class="card-title">Recommended Actions</div>{_actions_list(actions)}</div>
+  <div class="filter-slot" data-total="{len(rfes)}"></div>
+  <div class="live" data-live="kpis" data-scope="{sid}"></div>
   <div class="card"><div class="card-title">Top Priority Requests — by cluster
     <span class="muted" style="font-weight:400;font-size:12px">(expand a cluster to assign states)</span></div>
     <div class="requests-list">{cluster_rows}</div></div>
-  <div class="chart-container" style="margin-bottom:16px"><div id="{bubble_id}"></div></div>
-  <div class="card"><div class="card-title">At-Risk Accounts</div>{_risk_table(rfes)}</div>
-  <div class="card"><div class="card-title">Recommended Actions</div>{_actions_list(actions)}</div>
+  <div class="chart-container live-chart" style="margin-bottom:16px"><div id="{bubble_id}"></div></div>
+  <div class="card"><div class="card-title">At-Risk Accounts</div>
+    <div class="live" data-live="risk" data-scope="{sid}"></div></div>
 </div>""")
 
     # ── Chart data (JSON-embedded) ───────────────────────────────────────────
     chart_data = {
         "domains": [SECTION_NAME[s] for s in DOMAIN_IDS],
         "counts": [len(by_section.get(s, [])) for s in DOMAIN_IDS],
-        "arrs": [round(sum(r["arr"] for r in by_section.get(s, [])) / 1000.0, 1)
+        "arrs": [round(P.distinct_account_arr(by_section.get(s, [])) / 1000.0, 1)
                  for s in DOMAIN_IDS],
         "severity": {k: sum(1 for r in records if r["severity"] == k)
                      for k in ("Critical", "High", "Medium", "Low")},
@@ -1333,6 +1322,15 @@ def generate_report(db_path: str, run_id: str | None = None, progress=None) -> s
             for sid in DOMAIN_IDS if clusters_by_section.get(sid)
         },
     }
+
+    # NULL means the export had no Business Impact column (see main.py's
+    # insert_rfe_pull); 0 means it had one and nobody was flagged. The page needs
+    # to tell those apart, or "0 of 41 flagged" looks like a broken filter.
+    chart_data["bi_available"] = any(r.get("business_impact") not in (None, "")
+                                     for r in records)
+    chart_data["section_names"] = {sid: SECTION_NAME[sid] for sid in DOMAIN_IDS}
+    chart_data["section_emoji"] = {sid: SECTION_EMOJI[sid] for sid in DOMAIN_IDS}
+    chart_data["section_order"] = list(DOMAIN_IDS)
 
     _tick("Rendering charts and pages…", 88)
     return _page_shell(sidebar, "".join(pages), chart_data, print_sheets)
@@ -1357,11 +1355,6 @@ def _page_shell(sidebar: str, pages: str, chart_data: Dict[str, Any],
 body {{ margin:0; background:var(--bg); color:var(--text);
   font-family:'Inter','Segoe UI',Arial,sans-serif; font-size:14px;
   display:flex; min-height:100vh; }}
-body {{ display:grid; grid-template-columns:250px 1fr;
-        grid-template-areas:"side ctl" "side main"; }}
-#sidebar {{ grid-area:side; }}
-#ctl-bar {{ grid-area:ctl; position:sticky; top:0; z-index:50; }}
-#main {{ grid-area:main; }}
 #sidebar {{ width:250px; min-width:250px; background:#f8faff;
   border-right:1px solid var(--border); position:fixed; top:0; left:0;
   height:100vh; overflow-y:auto; z-index:100; }}
@@ -1534,10 +1527,33 @@ body {{ display:grid; grid-template-columns:250px 1fr;
             background:#eef4ff; color:#1d4ed8; cursor:help; white-space:nowrap; }}
 .chip-flag {{ background:#fee2e2 !important; color:#991b1b !important; font-weight:700; }}
 .rfe-rank-row {{ display:flex; gap:6px; align-items:center; margin:6px 0 2px; flex-wrap:wrap; }}
-.pdf-btn {{ background:#fff; border:1px solid #cbd5e1; color:#334155; font:inherit;
-           font-size:11px; font-weight:600; padding:4px 10px; border-radius:14px;
-           cursor:pointer; margin-left:6px; }}
-.pdf-btn:hover {{ border-color:#2563eb; color:#1d4ed8; }}
+/* The export button: a real button, pinned top-right of the hero. It was a
+   small white pill among the stat chips and was missed in review. */
+.hero {{ position:relative; }}
+.pdf-btn {{ position:absolute; top:22px; right:24px; display:inline-flex; align-items:center;
+           gap:7px; background:#fff; border:1.5px solid #2563eb; color:#1d4ed8;
+           font:inherit; font-size:12.5px; font-weight:700; padding:8px 15px;
+           border-radius:9px; cursor:pointer; box-shadow:0 1px 3px rgba(37,99,235,.18); }}
+.pdf-btn:hover {{ background:#2563eb; color:#fff; }}
+.pdf-btn .pdf-ico {{ font-size:14px; line-height:1; }}
+.hero-title, .hero-subtitle {{ padding-right:230px; }}
+
+/* Above the bar: the overview, labelled as such. Below it: the working area. */
+.overview-label {{ font-size:10.5px; font-weight:700; text-transform:uppercase;
+                  letter-spacing:.6px; color:#8090b0; margin:-10px 0 10px 2px; }}
+.filter-slot {{ position:sticky; top:0; z-index:60; margin:22px 0 14px; }}
+.filter-slot:empty {{ display:none; }}
+.filter-slot::after {{ content:'Everything below this bar follows the filters.';
+                      display:block; font-size:11px; color:#8090b0; margin:6px 0 0 4px; }}
+#ctl-bar {{ border:1px solid var(--border); border-radius:12px; background:#f4f6fa;
+           box-shadow:0 4px 14px rgba(17,24,39,.07); }}
+.live {{ min-height:24px; }}
+/* Plotly's responsive mode sizes a chart to its box. A box with no height
+   collapsed to 0px while a 450px chart drew inside it and spilled over the
+   At-Risk table below. The live charts get a definite height. */
+.live-chart > div {{ height:400px; }}
+.domain-card.empty {{ opacity:.42; }}
+.kpi-row {{ margin-bottom:18px; }}
 
 /* ── The per-domain one-pager ────────────────────────────────────────────── */
 /* Hidden on screen; the print rules below reveal exactly one of them. */
@@ -1602,19 +1618,17 @@ body {{ display:grid; grid-template-columns:250px 1fr;
 </style></head>
 <body>
 {sidebar}
-<div id="ctl-bar"></div>
-<div id="main">{pages}</div>
+<div id="main"><div id="ctl-bar"></div>{pages}</div>
 <div id="print-area">{print_sheets}</div>
 <div class="toast" id="toast">Copied to clipboard</div>
 <script>
 {report_ui.BAND_JS}
 {report_ui.FILTER_JS}
+{report_ui.CHART_TEXT_JS}
 
 /* Filters and sorting act on the cards this report renders in Python:
    a theme is `.request-card`, a request inside it is `.rfe-card`. */
-var WEEKLY_FILTER_CFG = {{
-  sectionSel: '.section-page', groupSel: '.request-card', rowSel: '.rfe-card'
-}};
+
 
 /** Export one domain as a PDF through the browser's own print dialog.
  *  The screen layout is never printed — a sheet built for the page is. */
@@ -1638,9 +1652,280 @@ function exportDomainPdf(sid) {{
   setTimeout(done, 60000);
 }}
 
+/* ── Live panels ───────────────────────────────────────────────────────────
+   Everything below the filter bar is drawn from the request cards the filters
+   leave visible: KPI tiles, the domain overview, the four charts, the cluster
+   bubble chart and the at-risk tables. One implementation each, so a panel
+   cannot disagree with the cards beneath it. ARR counts every account once. */
+
+function visibleFacts() {{
+  return Array.prototype.map.call(
+    document.querySelectorAll('.rfe-card:not(.filtered-out)'), function (el) {{
+      var d = el.getAttribute('data-days');
+      return {{
+        el: el,
+        caseNum: el.getAttribute('data-case') || '',
+        acct: el.getAttribute('data-acct') || '',
+        arr: Number(el.getAttribute('data-arr')) || 0,
+        sev: el.getAttribute('data-sev') || '',
+        bi: el.getAttribute('data-bi') === '1',
+        days: (d === null || d === '') ? null : Number(d),
+        score: Number(el.getAttribute('data-score')) || 0,
+        section: el.getAttribute('data-section') || ''
+      }};
+    }});
+}}
+
+/** ARR at stake: each account counted once, at its largest recorded value. */
+function distinctArr(facts) {{
+  var per = {{}};
+  facts.forEach(function (f) {{
+    var k = f.acct || ('__anon_' + f.caseNum);
+    per[k] = Math.max(per[k] || 0, f.arr);
+  }});
+  return Object.keys(per).reduce(function (s, k) {{ return s + per[k]; }}, 0);
+}}
+
+function fmtArrJs(v) {{
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return '$' + Math.round(v / 1e3) + 'K';
+  return '$' + Math.round(v);
+}}
+
+function escJs(s) {{
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}}
+
+var isRecent = function (f) {{ return f.days !== null && f.days <= 14; }};
+var isHigh = function (f) {{ return f.sev === 'critical' || f.sev === 'high'; }};
+
+function kpiHtml(items) {{
+  return '<div class="kpi-row">' + items.map(function (k) {{
+    return '<div class="kpi-card"><div class="kpi-val ' + k[2] + '">' + k[0] + '</div>' +
+           '<div class="kpi-label">' + k[1] + '</div></div>';
+  }}).join('') + '</div>';
+}}
+
+function renderKpis(el, facts, scope) {{
+  var accounts = {{}};
+  facts.forEach(function (f) {{ if (f.acct) accounts[f.acct] = 1; }});
+  if (scope === 'all') {{
+    el.innerHTML = kpiHtml([
+      [facts.length, 'Total RFEs', 'blue'],
+      [facts.filter(isRecent).length, 'Filed &le; 14 Days', 'teal'],
+      [facts.filter(isHigh).length, 'High / Critical', 'red'],
+      [fmtArrJs(distinctArr(facts)), 'ARR at Stake', 'green'],
+      [fmtArrJs(facts.reduce(function (m, f) {{ return Math.max(m, f.arr); }}, 0)),
+       'Top Single-RFE ARR', 'yellow']
+    ]);
+  }} else {{
+    el.innerHTML = kpiHtml([
+      [facts.length, 'Total', 'blue'],
+      [facts.filter(isRecent).length, 'Last 14 Days', 'teal'],
+      [facts.filter(isHigh).length, 'High / Critical', 'red'],
+      [fmtArrJs(distinctArr(facts)), 'ARR at Stake', 'green'],
+      [Object.keys(accounts).length, 'Unique Accounts', 'yellow']
+    ]);
+  }}
+}}
+
+function renderDomainCards(el, facts) {{
+  el.innerHTML = CHART.section_order.map(function (sid) {{
+    var mine = facts.filter(function (f) {{ return f.section === sid; }});
+    var themes = document.querySelectorAll(
+      '#section-' + sid + ' .request-card:not(.filtered-out)').length;
+    var top = mine.slice().sort(function (a, b) {{ return b.score - a.score; }})[0];
+    // &#39; rather than a backslash-escaped quote: inside this Python f-string the
+    // backslash is consumed before the page sees it, which left two adjacent
+    // string literals and a SyntaxError that stopped every live panel.
+    return '<div class="domain-card' + (mine.length ? '' : ' empty') +
+      '" onclick="showSection(&#39;' + sid + '&#39;)">' +
+      '<div class="domain-card-emoji">' + CHART.section_emoji[sid] + '</div>' +
+      '<div class="domain-card-name">' + escJs(CHART.section_names[sid]) + '</div>' +
+      '<div class="domain-card-stats">' +
+        '<div class="domain-stat">RFEs <span>' + mine.length + '</span></div>' +
+        '<div class="domain-stat">ARR <span>' + fmtArrJs(distinctArr(mine)) + '</span></div>' +
+        '<div class="domain-stat">Clusters <span>' + themes + '</span></div>' +
+      '</div>' +
+      '<div class="domain-card-top">Top: <span>' + (top ? '#' + escJs(top.caseNum) : '&mdash;') +
+      '</span></div></div>';
+  }}).join('');
+}}
+
+/** Same eligibility the server used: ARR over $100K, any High/Critical
+ *  request, or two or more requests from the account. Top ten by ARR. */
+function renderRisk(el, facts, scope) {{
+  var by = {{}};
+  facts.forEach(function (f) {{
+    var k = f.acct || '(unnamed)';
+    (by[k] = by[k] || []).push(f);
+  }});
+  var rows = Object.keys(by).map(function (a) {{
+    var items = by[a].slice().sort(function (x, y) {{ return y.score - x.score; }});
+    return {{ acct: a, items: items,
+             arr: items.reduce(function (m, f) {{ return Math.max(m, f.arr); }}, 0),
+             high: items.filter(isHigh).length }};
+  }}).filter(function (r) {{ return r.arr > 100000 || r.high > 0 || r.items.length >= 2; }})
+    .sort(function (a, b) {{ return (b.arr - a.arr) || (b.items.length - a.items.length); }})
+    .slice(0, 10);
+  if (!rows.length) {{
+    el.innerHTML = '<div class="muted">' + (filtersAreActive()
+      ? 'No at-risk account matches the current filters.'
+      : (scope === 'all' ? 'No at-risk accounts in this report.'
+                         : 'No at-risk accounts in this domain.')) + '</div>';
+    return;
+  }}
+  el.innerHTML = '<table class="risk-table"><thead><tr><th>Account</th><th>ARR</th>' +
+    '<th>RFEs</th><th>High/Critical</th><th>Cases</th></tr></thead><tbody>' +
+    rows.map(function (r) {{
+      return '<tr><td>' + escJs(r.acct) + '</td><td>' + fmtArrJs(r.arr) + '</td><td>' +
+        r.items.length + '</td><td>' + r.high + '</td><td>' +
+        r.items.slice(0, 3).map(function (f) {{ return '#' + escJs(f.caseNum); }}).join(', ') +
+        '</td></tr>';
+    }}).join('') + '</tbody></table>';
+}}
+
+function renderExecCharts(facts) {{
+  var order = CHART.section_order;
+  var names = order.map(function (sid) {{ return CHART.section_names[sid]; }});
+  var per = order.map(function (sid) {{
+    return facts.filter(function (f) {{ return f.section === sid; }});
+  }});
+  Plotly.react('chart-count', [{{ x:names, y:per.map(function (a) {{ return a.length; }}),
+    type:'bar', marker:{{ color:'#2563eb' }} }}],
+    Object.assign({{}}, LIGHT, {{ title:'RFE count by domain' }}), CFG);
+  Plotly.react('chart-arr', [{{ x:names,
+    y:per.map(function (a) {{ return Math.round(distinctArr(a) / 100) / 10; }}),
+    type:'bar', marker:{{ color:'#16a34a' }},
+    hovertemplate:'%{{x}}<br>$%{{y}}K<extra></extra>' }}],
+    Object.assign({{}}, LIGHT, {{ title:'ARR at stake by domain ($K, each account once)' }}), CFG);
+  var sevKeys = [['critical','Critical'], ['high','High'], ['medium','Medium'],
+                 ['low','Low'], ['','Unset']];
+  var sevVals = sevKeys.map(function (k) {{
+    return facts.filter(function (f) {{ return f.sev === k[0]; }}).length; }});
+  var keep = sevVals.map(function (v, i) {{ return v > 0 || i < 4; }});
+  Plotly.react('chart-sev', [{{
+    labels:sevKeys.filter(function (_, i) {{ return keep[i]; }}).map(function (k) {{ return k[1]; }}),
+    values:sevVals.filter(function (_, i) {{ return keep[i]; }}),
+    type:'pie', hole:.45, sort:false,
+    marker:{{ colors:['#dc2626','#f97316','#b45309','#5a6a8a','#94a3b8'] }} }}],
+    Object.assign({{}}, LIGHT, {{ title:'Severity distribution' }}), CFG);
+  Plotly.react('chart-recent', [
+    {{ x:names, y:per.map(function (a) {{ return a.filter(isRecent).length; }}),
+       type:'bar', name:'\u2264 14 days', marker:{{ color:'#0891b2' }} }},
+    {{ x:names, y:per.map(function (a) {{ return a.filter(function (f) {{ return !isRecent(f); }}).length; }}),
+       type:'bar', name:'Older', marker:{{ color:'#b8c8e8' }} }}
+  ], Object.assign({{}}, LIGHT, {{ title:'Recent vs. older requests', barmode:'stack' }}), CFG);
+}}
+
+/** The cluster bubble chart, from the clusters still visible — each bubble's
+ *  ARR is the distinct-account ARR of the requests in it that still match. */
+function renderBubble(sid) {{
+  var host = document.getElementById('bubble-' + sid);
+  if (!host) return;
+  var themes = Array.prototype.slice.call(
+    document.querySelectorAll('#section-' + sid + ' .request-card:not(.filtered-out)'));
+  var pts = themes.map(function (t, i) {{
+    var cards = Array.prototype.map.call(t.querySelectorAll('.rfe-card:not(.filtered-out)'),
+      function (el) {{ return {{ acct: el.getAttribute('data-acct') || '',
+                                arr: Number(el.getAttribute('data-arr')) || 0,
+                                caseNum: el.getAttribute('data-case') }}; }});
+    return {{ x: i + 1, y: Math.round(distinctArr(cards) / 100) / 10,
+             size: Math.max(8, Math.min(60, (Number(t.getAttribute('data-score')) || 0) / 2)),
+             text: plotlyText(t.getAttribute('data-title') || '') }};
+  }});
+  Plotly.react(host, [{{
+    x: pts.map(function (p) {{ return p.x; }}), y: pts.map(function (p) {{ return p.y; }}),
+    text: pts.map(function (p) {{ return p.text; }}), mode:'markers',
+    marker:{{ size: pts.map(function (p) {{ return p.size; }}), color:'#2563eb', opacity:.62,
+             line:{{ color:'#1d4ed8', width:1 }} }},
+    hovertemplate:'%{{text}}<br>ARR: $%{{y}}K<extra></extra>'
+  }}], Object.assign({{}}, LIGHT, {{
+    height: 400,
+    title: pts.length ? 'Cluster momentum \u2014 ARR vs. priority (bubble size = PI Priority)'
+                      : 'No cluster matches the current filters',
+    xaxis: Object.assign({{}}, LIGHT.xaxis, {{ title:'Cluster rank' }}),
+    yaxis: Object.assign({{}}, LIGHT.yaxis, {{ title:'ARR ($K)' }})
+  }}), CFG);
+}}
+
+function renderNavBadges(facts) {{
+  CHART.section_order.forEach(function (sid) {{
+    var b = document.querySelector('#nav-' + sid + ' .nav-badge');
+    if (b) b.textContent = facts.filter(function (f) {{ return f.section === sid; }}).length;
+  }});
+}}
+
+/** The bar's count, in the terms of the section on screen. Inside EPP it used
+ *  to read "287 requests in scope" — the whole report — beside 55 EPP cards. */
+function renderScopeStatus(sid, facts) {{
+  var el = document.getElementById('ctl-count');
+  if (!el) return;
+  var total = document.querySelectorAll('.rfe-card').length;
+  if (sid === 'exec') {{
+    el.innerHTML = filtersAreActive()
+      ? 'Showing <strong>' + facts.length + '</strong> of ' + total + ' requests'
+      : '<strong>' + total + '</strong> requests in scope';
+    return;
+  }}
+  var name = escJs(CHART.section_names[sid] || sid);
+  var inSec = document.querySelectorAll('#section-' + sid + ' .rfe-card').length;
+  var shownSec = facts.filter(function (f) {{ return f.section === sid; }}).length;
+  el.innerHTML = filtersAreActive()
+    ? 'Showing <strong>' + shownSec + '</strong> of ' + inSec + ' in ' + name +
+      ' &middot; ' + facts.length + ' of ' + total + ' in the report'
+    : '<strong>' + inSec + '</strong> requests in ' + name +
+      ' &middot; ' + total + ' in the report';
+}}
+
+function activeSectionId() {{
+  var el = document.querySelector('.section-page.active');
+  return el ? el.id.replace('section-', '') : 'exec';
+}}
+
+function renderLive() {{
+  var facts = visibleFacts();
+  document.querySelectorAll('.live[data-live]').forEach(function (el) {{
+    var scope = el.getAttribute('data-scope');
+    var mine = scope === 'all' ? facts
+             : facts.filter(function (f) {{ return f.section === scope; }});
+    var kind = el.getAttribute('data-live');
+    if (kind === 'kpis') renderKpis(el, mine, scope);
+    else if (kind === 'risk') renderRisk(el, mine, scope);
+    else if (kind === 'domains') renderDomainCards(el, mine);
+  }});
+  renderNavBadges(facts);
+  var sid = activeSectionId();
+  renderScopeStatus(sid, facts);
+  // Charts are only drawn into a visible section — Plotly sizes to its box.
+  if (sid === 'exec') renderExecCharts(facts); else renderBubble(sid);
+}}
+
+/** One control bar, moved into whichever section is showing, under its
+ *  overview — so the bar is always directly above what it drives. */
+function mountFilterBar(sid) {{
+  var bar = document.getElementById('ctl-bar');
+  var slot = document.querySelector('#section-' + sid + ' .filter-slot');
+  if (bar && slot && bar.parentElement !== slot) slot.appendChild(bar);
+}}
+
 document.addEventListener('DOMContentLoaded', function () {{
   initTips();
-  renderControlBar('ctl-bar', WEEKLY_FILTER_CFG);
+  // The bubble chart is now drawn from the filtered clusters by renderLive.
+  drawBubble = function () {{}};
+  var baseShow = showSection;
+  showSection = function (id) {{
+    baseShow(id);
+    mountFilterBar(id);
+    renderLive();
+  }};
+  mountFilterBar('exec');
+  renderControlBar('ctl-bar', {{
+    sectionSel: '.section-page', groupSel: '.request-card', rowSel: '.rfe-card',
+    biAvailable: CHART.bi_available,
+    afterApply: renderLive
+  }});
 }});
 
 var CHART = {json.dumps(chart_data)};

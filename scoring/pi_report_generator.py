@@ -488,8 +488,12 @@ def load_data(db_path: str, run_id: Optional[str] = None) -> List[Dict]:
         }
         for c in extra:
             rec[c] = r[c] if r[c] is not None else ""
+        # business_impact keeps its NULL: it means the export had no such column,
+        # which the report must not present as "nobody was flagged".
+        if "business_impact" in extra and r["business_impact"] is None:
+            rec["business_impact"] = None
         for c in V2_COLUMNS:
-            rec.setdefault(c, "")
+            rec.setdefault(c, None if c == "business_impact" else "")
         result.append(rec)
     return result
 
@@ -719,6 +723,7 @@ def build_timeframe(records: Sequence[Dict], cutoff: Optional[datetime],
         "non_usd": sum(1 for r in scope if (r.get("arr_currency") or "USD").strip().upper()
                        not in ("", "USD")),
         "missing_dates": sum(1 for r in scope if not r["created_date"]),
+        "bi_available": any(r.get("business_impact") is not None for r in scope),
         "missing_severity": sum(1 for r in scope
                                 if not P.normalise_severity(r.get("severity"))),
         "monthly": _monthly_counts(scope),

@@ -490,3 +490,25 @@ def test_totals_and_domain_counts_agree(model):
     for tf_key, frame in model["tf"].items():
         assert sum(d["requests"] for d in frame["domains"]) == frame["totals"]["requests"]
         assert sum(c["requests"] for c in frame["clusters"]) == frame["totals"]["requests"]
+
+
+def test_missing_business_impact_column_is_disclosed(db):
+    """NULL means the export had no such column, and the report must say so
+    rather than show "0 flagged" as if nobody had asserted an impact."""
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE rfe_pulls SET business_impact=NULL")
+    conn.commit(); conn.close()
+    m = G.build_model(db, RUN, now=NOW)
+    notes = " ".join(m["tf"]["all"]["narrative"]["data_quality"])
+    assert m["tf"]["all"]["totals"]["bi_available"] is False
+    assert "no Business Impact column" in notes
+
+
+def test_zero_flags_with_column_present_is_disclosed(db):
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE rfe_pulls SET business_impact=0")
+    conn.commit(); conn.close()
+    m = G.build_model(db, RUN, now=NOW)
+    notes = " ".join(m["tf"]["all"]["narrative"]["data_quality"])
+    assert m["tf"]["all"]["totals"]["bi_available"] is True
+    assert "nobody set it" in notes

@@ -261,3 +261,139 @@ def test_interactive_chrome_is_left_out_of_the_pdf(html):
     print_block = html[html.index("@media print"):]
     for hidden in ("#sidebar", "#main", "#ctl-bar", ".pdf-btn"):
         assert hidden in print_block, hidden
+
+def test_a_section_without_request_cards_is_left_alone(html):
+    """The Executive Overview holds KPIs and charts, not request cards. It was
+    permanently reporting "No request in this section matches the current
+    filters" with no filters active."""
+    assert "if (!sec.querySelectorAll(cfg.groupSel).length) return;" in html
+
+
+# ── v2.8: filters drive everything below them ───────────────────────────────
+
+def _section(html, sid):
+    start = html.index(f'id="section-{sid}"')
+    nxt = html.find('<div class="section-page"', start + 10)
+    return html[start:nxt if nxt != -1 else len(html)]
+
+
+def test_overview_sits_above_the_bar_and_live_panels_below(html):
+    """The rule: above the bar = the whole section, below it = the filters."""
+    for sid in ("exec", "epp"):
+        sec = _section(html, sid)
+        summary = sec.index("Executive Summary")
+        slot = sec.index('class="filter-slot"')
+        kpis = sec.index('data-live="kpis"')
+        risk = sec.index('data-live="risk"')
+        assert summary < slot < kpis < risk, sid
+
+
+def test_recommended_actions_moved_into_the_overview(html):
+    """Actions describe the whole domain, so they sit above the bar."""
+    sec = _section(html, "epp")
+    assert sec.index("Recommended Actions") < sec.index('class="filter-slot"')
+
+
+def test_every_panel_below_the_bar_is_live(html):
+    sec = _section(html, "exec")
+    below = sec[sec.index('class="filter-slot"'):]
+    for kind in ("kpis", "domains", "risk"):
+        assert f'data-live="{kind}"' in below, kind
+    for chart in ("chart-count", "chart-arr", "chart-sev", "chart-recent"):
+        assert chart in below
+
+
+def test_server_side_copies_of_live_panels_are_gone():
+    """One implementation per panel, or they drift apart."""
+    assert not hasattr(W, "_kpi_row")
+    assert not hasattr(W, "_risk_table")
+
+
+def test_layout_is_not_offset_twice(html):
+    """A grid column of 250px on top of the fixed sidebar's own 250px margin
+    pushed every page right by a sidebar's width."""
+    assert "grid-template-areas" not in html
+    assert '<div id="main"><div id="ctl-bar"></div>' in html
+
+
+def test_arr_counts_each_account_once(tmp_path):
+    """The weekly report was still summing ARR per request, the bug the PI
+    report fixed in v2.6 ($64.1M reported against a true $20.0M)."""
+    path = str(tmp_path / "arr.db")
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE rfe_pulls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, case_number TEXT,
+        subject TEXT, description TEXT, account_name TEXT, account_arr REAL,
+        status TEXT, domain TEXT, sub_domain TEXT, severity TEXT,
+        created_date TEXT, pulled_at TEXT, business_impact INTEGER,
+        business_impact_reason TEXT, case_owner TEXT, arr_currency TEXT)""")
+    conn.execute("CREATE TABLE run_meta (run_id TEXT, started_at TEXT, rfe_count INTEGER, "
+                 "status TEXT, source TEXT)")
+    conn.executemany(
+        "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
+        "account_arr,status,domain,sub_domain,severity,created_date,pulled_at,"
+        "business_impact,business_impact_reason,case_owner,arr_currency) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [_row(f"0070000{i}", f"Distinct request number {i} about exports", account="Solo AG",
+              arr=200_000.0) for i in range(3)])
+    conn.commit(); conn.close()
+    out = W.generate_report(path, RUN)
+    epp = _section(out, "epp")
+    assert "$200K ARR" in epp, "one account with three requests is $200K, not $600K"
+    assert "$600K" not in epp
+
+
+def test_pdf_button_is_a_real_button_in_every_section(html):
+    assert html.count('class="pdf-btn"') >= 2
+    assert "exportDomainPdf('exec')" in html
+    assert "Export the whole report as PDF" in html
+    assert "Export this domain as PDF" in html
+
+
+def test_executive_one_pager_exists_and_skips_the_catch_all(html):
+    sheet = html[html.index('id="print-sheet-exec"'):]
+    sheet = sheet[:sheet.index('id="print-sheet-', 20)] if 'id="print-sheet-' in sheet[20:] else sheet
+    assert "Themes worth discussing" in sheet
+    assert "Other Requests in this Domain" not in sheet
+
+
+def test_no_business_impact_column_is_reported_as_such(db):
+    """NULL (column absent) and 0 (nobody flagged) are different answers. A
+    41-row upload with no flags read as a broken filter during review."""
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE rfe_pulls SET business_impact=NULL")
+    conn.commit(); conn.close()
+    out = W.generate_report(db, RUN)
+    assert '"bi_available": false' in out
+
+
+def test_zero_flags_with_the_column_present_is_reported_as_such(db):
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE rfe_pulls SET business_impact=0")
+    conn.commit(); conn.close()
+    out = W.generate_report(db, RUN)
+    assert '"bi_available": true' in out
+    assert "nobody set it on any of these requests" in out
+
+
+def test_tam_chase_never_cuts_a_case_number():
+    """It used to slice the list at 120 characters, mid-number."""
+    rfes = [{"case_number": f"0050000{i}", "description": ""} for i in range(8)]
+    line = W._tam_chase(rfes)
+    assert "#00500004" in line and "and 3 more" in line
+    assert "#00500005" not in line
+
+
+def test_domain_card_click_handler_is_valid_js(html):
+    """A backslash-escaped quote inside the Python f-string was consumed, which
+    emitted two adjacent string literals — a SyntaxError that stopped every
+    live panel on the page."""
+    assert "showSection('' + sid" not in html
+    assert "showSection(&#39;' + sid + '&#39;)" in html
+
+
+def test_chart_text_escaper_is_shared(html):
+    """renderBubble calls plotlyText; it existed only in the PI page."""
+    assert report_ui.CHART_TEXT_JS in html
+    from scoring import pi_report_assets as A
+    assert report_ui.CHART_TEXT_JS in A.JS

@@ -589,6 +589,17 @@ def data_quality_notes(model: Dict[str, Any]) -> List[str]:
     """
     notes: List[str] = []
     t = model["totals"]
+    if t.get("bi_available") is False:
+        notes.append(
+            "This export has no Business Impact column, so no request can be shown "
+            "as flagged and the business-impact floors cannot apply. Add the column "
+            "to the Salesforce report and re-upload to use them."
+        )
+    elif not t.get("flagged"):
+        notes.append(
+            "No request in this export carries a business-impact flag. The column is "
+            "present; nobody set it on any of these requests."
+        )
     if t["zero_arr_accounts"]:
         notes.append(
             f"{plural(t['zero_arr_accounts'], 'account')} of {t['customers']} have "

@@ -471,18 +471,7 @@ function wrapLabel(text, width) {
   return {html: lines.map(plotlyText).join('<br>'), lines: Math.max(1, lines.length)};
 }
 
-/** Make customer-authored text safe for a Plotly label.
- *
- *  Plotly draws SVG text and parses a small HTML subset; it does NOT decode
- *  entities, so running esc() over a label put a literal `&quot;` on the axis
- *  ("Critical alerts classified as &quot;high&quot;"). Quotes and ampersands are
- *  therefore left exactly as the customer typed them, and only the angle
- *  brackets are neutralised — swapped for look-alike single-character glyphs, so
- *  "value < 10" keeps its meaning while no tag can be parsed out of a subject. */
-function plotlyText(s) {
-  return String(s === null || s === undefined ? '' : s)
-    .replace(/</g, '‹').replace(/>/g, '›');
-}
+%%CHART_TEXT_JS%%
 
 /** Height for a horizontal category chart, from how many lines its labels need. */
 function barHeight(wrapped, base) {
@@ -1327,6 +1316,7 @@ repetition, recency and request subject) &middot; PM decision summaries written 
 # Weekly Analysis report so the two cannot drift apart. See scoring/report_ui.py.
 CSS = CSS.replace("%%BAND_CSS%%", report_ui.BAND_CSS)
 JS = JS.replace("%%BAND_JS%%", report_ui.BAND_JS)
+JS = JS.replace("%%CHART_TEXT_JS%%", report_ui.CHART_TEXT_JS)
 
 
 def render(model: Dict[str, Any]) -> str:

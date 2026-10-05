@@ -696,6 +696,93 @@ One bug found in review: the screen layout had become a CSS grid with a 250px
 sidebar column, so the print sheet rendered **inside that column**. `@media
 print` now resets `body` to `display:block`.
 
+## 7d. Filters drive everything below them
+
+Review of v2.7 in the platform: the weekly report was not centred; the KPI
+tiles, executive summary and charts did not respond to the filters; "if the
+classifications are at the top they need to apply on any component" — with the
+executive summary excluded and the filters placed underneath it; and the PDF
+button could not be found.
+
+### The rule
+
+**Above the bar describes the whole section and never changes. Below the bar is
+the working area and always reflects the filters.** A filter bar at the top of
+the page that changed one panel of six was claiming to drive numbers it did not
+touch.
+
+Per section, top to bottom: hero (with the export button) → Executive Summary →
+Recommended Actions, labelled *Section overview — all N requests, not affected
+by the filters* → **the filter bar** → KPI tiles → domain overview (exec) →
+charts → request clusters → at-risk accounts. Recommended Actions moved up
+because it describes the whole domain. There is one bar element; it is moved
+into whichever section is showing, so it always sits directly above what it
+drives, and it stays pinned while the working area scrolls. Its count is
+section-aware — inside EPP it reads "Showing 2 of 55 in EPP · 10 of 287 in the
+report", where it used to say "287 requests in scope" beside 55 EPP cards.
+
+### One implementation per panel
+
+The KPI tiles, the domain overview cards, the four executive charts, the cluster
+bubble chart, the at-risk tables and the sidebar counts are drawn in the page
+from the request cards the filters leave visible. Their server-side builders
+(`_kpi_row`, `_risk_table`, the domain-card block) were deleted, not left in
+parallel: two implementations of one panel drift apart. The at-risk table keeps
+the server's eligibility rule — ARR over $100K, any High/Critical request, or
+two or more requests from the account; top ten by ARR — re-applied to the
+filtered set.
+
+QA on a 287-request production upload: **15 filter combinations, 610
+assertions** that every panel agrees with the visible cards (totals, distinct
+ARR, domain-card sums, chart totals, at-risk membership, all ten sidebar counts,
+every domain's KPIs) — zero failures. Card counts were separately checked
+against expectations computed from the raw Salesforce columns.
+
+### Bugs found and fixed on the way
+
+* **Content offset twice.** The original layout is a fixed sidebar plus
+  `#main { margin-left: 250px }`; the v2.7 control bar added a 250px grid column
+  on top. Removed; the bar now lives inside `#main`.
+* **ARR still counted per request in the weekly report** — the bug the PI report
+  fixed in v2.6 — in six places, including the KPI tile and the domain cards. A
+  41-request upload's "Total ARR" fell from $3.9M to $3.1M once each account was
+  counted once.
+* **A backslash-escaped quote inside a Python f-string** emitted
+  `showSection('' + sid + '')` — two adjacent string literals and a SyntaxError
+  that stopped every live panel. Replaced with `&#39;`, which has no escape to
+  lose.
+* **`plotlyText` existed only in the PI page**, so the weekly bubble chart would
+  have thrown on first draw. Moved to `report_ui.CHART_TEXT_JS`, shared.
+* **The bubble chart spilled over the at-risk table.** Plotly's responsive mode
+  sizes a chart to its box; the box had no height, collapsed to 0px, and a 450px
+  chart drew out of it. Live charts now have a definite height.
+* **The TAM-chase action cut its case list at 120 characters**, which could stop
+  part-way through a case number. Now "#… and N more".
+* **"Other Requests in this Domain" appeared under "Themes worth discussing"** on
+  domain PDF sheets. Catch-alls are excluded from every sheet's theme table.
+
+### "0 flagged" now says which kind of zero it is
+
+The review's "Flagged only → 0 of 41" was correct: that upload had no flagged
+requests (the 287-row upload has 10). But nothing could tell a reader that,
+because an export *without* the Business Impact column was stored identically —
+as 0. `insert_rfe_pull` now stores **NULL when the column is absent**, both
+reports carry `bi_available`, and the page and the PI data-quality note say
+either "this export has no Business Impact column" (and disable the control) or
+"the column is there; nobody set it". Uploads made before this change were
+stored as 0 and read as the second case.
+
+### The PDF button, and a sheet for the whole report
+
+The button is a real one now, pinned top-right of every hero — it was a small
+white pill among the stat chips and was missed. It sits above the bar, so it
+exports the whole section, which is what its label says. The Executive Overview
+gained its own one-pager: whole-report stat tiles, the decision split, the top
+seven themes portfolio-wide with their domain named, and the top five
+escalations. At eight themes and six escalations it measured exactly 1.00 of an
+A4 page, with no allowance for print rendering differing from screen; at seven
+and five it uses 0.92. Domain sheets use 0.41–0.78.
+
 ## 8. Known gaps
 
 1. **SOQL ingest does not capture Business Impact** (§2.2). A report built from

@@ -302,16 +302,20 @@ function applyFilters(cfg) {
 
   // Tell each section whether anything is left in it.
   document.querySelectorAll(cfg.sectionSel).forEach(sec => {
+    // A section that holds no request cards at all is not a request section —
+    // the Executive Overview is KPIs and charts. Without this it reported
+    // "No request in this section matches the current filters" permanently,
+    // with no filters active.
+    if (!sec.querySelectorAll(cfg.groupSel).length) return;
     const visible = sec.querySelectorAll(cfg.groupSel + ':not(.filtered-out)').length;
     let note = sec.querySelector('.no-match-note');
     if (!visible) {
       if (!note) {
         note = document.createElement('div');
         note.className = 'no-match-note';
-        note.textContent = 'No request in this section matches the current filters. '
-          + 'Clear or widen them to see what is here.';
         sec.appendChild(note);
       }
+      note.textContent = noMatchReason(cfg);
       note.classList.remove('filtered-out');
     } else if (note) {
       note.classList.add('filtered-out');
@@ -326,6 +330,30 @@ function applyFilters(cfg) {
   }
   const clear = document.getElementById('ctl-clear');
   if (clear) clear.style.display = filtersAreActive() ? '' : 'none';
+
+  // Everything else the filters drive — KPI tiles, charts, tables — is redrawn
+  // by the page, which knows its own layout. The engine only knows the cards.
+  if (typeof cfg.afterApply === 'function') cfg.afterApply(shown, total);
+}
+
+/** Why nothing matched, in the terms the reader chose.
+ *
+ *  "0 of 41" on Flagged only looked like a broken filter during review, when in
+ *  fact that export had no flagged requests at all. When the cause is a property
+ *  of the data rather than of the filter, the note says so. */
+function noMatchReason(cfg) {
+  if (FILTER_STATE.bi === 'flagged') {
+    if (cfg.biAvailable === false) {
+      return 'This export has no Business Impact column, so no request can be ' +
+             'shown as flagged. Add the column to the Salesforce report and re-upload.';
+    }
+    if (!document.querySelector(cfg.rowSel + '[data-bi="1"]')) {
+      return 'No request in this export carries a business-impact flag. The column ' +
+             'is there; nobody set it on any of these requests.';
+    }
+  }
+  return 'No request in this section matches the current filters. ' +
+         'Clear or widen them to see what is here.';
 }
 
 function filtersAreActive() {
@@ -357,8 +385,11 @@ function renderControlBar(hostId, cfg) {
                      ['oldest', 'Oldest']], 'priority') + '</div>' +
     '<div class="ctl"><label>Severity</label><div class="chip-row">' + sevChips + '</div></div>' +
     '<div class="ctl"><label for="w-bi">Business impact</label>' +
-      sel('w-bi', [['any', 'Any'], ['flagged', 'Flagged only'],
-                   ['unflagged', 'Not flagged']], 'any') + '</div>' +
+      (cfg.biAvailable === false
+        ? '<select id="w-bi" disabled title="This export has no Business Impact column">' +
+          '<option>Not in this export</option></select>'
+        : sel('w-bi', [['any', 'Any'], ['flagged', 'Flagged only'],
+                       ['unflagged', 'Not flagged']], 'any')) + '</div>' +
     '<div class="ctl"><label for="w-arr">ARR</label>' +
       sel('w-arr', [['any', 'Any'], ['high', '$1M and above'], ['mid', '$250K &ndash; $1M'],
                     ['low', 'Under $250K'], ['none', 'No ARR recorded']], 'any') + '</div>' +
@@ -405,5 +436,25 @@ function clearFilters() {
   });
   document.querySelectorAll('#ctl-bar .fchip').forEach(c => c.classList.add('on'));
   applyFilters(window._filterCfg);
+}
+"""
+
+
+# ── Text bound for a chart ──────────────────────────────────────────────────
+# Shared so both reports escape chart labels the same way. Plotly draws SVG text
+# and does not decode HTML entities, so the page's HTML escaper is the wrong tool
+# for a chart: it put literal "&quot;" and "&middot;" on axes in v2.6.
+CHART_TEXT_JS = r"""
+/** Make customer-authored text safe for a Plotly label.
+ *
+ *  Plotly draws SVG text and parses a small HTML subset; it does NOT decode
+ *  entities, so running esc() over a label put a literal `&quot;` on the axis
+ *  ("Critical alerts classified as &quot;high&quot;"). Quotes and ampersands are
+ *  therefore left exactly as the customer typed them, and only the angle
+ *  brackets are neutralised — swapped for look-alike single-character glyphs, so
+ *  "value < 10" keeps its meaning while no tag can be parsed out of a subject. */
+function plotlyText(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/</g, '‹').replace(/>/g, '›');
 }
 """

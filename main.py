@@ -329,13 +329,21 @@ def parse_flag(val) -> int:
     if isinstance(val, (int, float)): return 1 if val else 0
     return 1 if str(val).strip().lower() in ("1", "true", "yes", "y", "x", "checked") else 0
 
-def insert_rfe_pull(cur, run_id: str, g, pulled_at: str) -> None:
+def insert_rfe_pull(cur, run_id: str, g, pulled_at: str,
+                    has_business_impact: bool = True) -> None:
     """Insert one uploaded RFE row.
 
     `g(field)` reads a mapped column from the source row. Shared by the Signal
     Match import and the per-PM report upload so both paths capture the same
     fields — when only one of them stored Business Impact, a report built from
     the shared run silently ranked as if no customer had ever asserted one.
+
+    `has_business_impact` says whether the export carried that column at all.
+    When it did not, the flag is stored as NULL rather than 0: "nobody flagged
+    anything" and "this export cannot tell you" are different answers, and a
+    41-row upload with no flags was indistinguishable from one missing the
+    column — so a reader seeing "0 of 41 flagged" could not tell whether the
+    filter had failed. The reports now say which it is.
     """
     cur.execute(
         "INSERT INTO rfe_pulls (run_id,case_number,subject,description,account_name,"
@@ -345,7 +353,8 @@ def insert_rfe_pull(cur, run_id: str, g, pulled_at: str) -> None:
         (run_id, g("case_number"), g("subject"), g("description"), g("account_name"),
          parse_arr(g("account_arr")), g("status"), g("domain"), g("sub_domain"),
          g("severity"), g("created_date"), pulled_at,
-         parse_flag(g("business_impact")), g("business_impact_reason"),
+         parse_flag(g("business_impact")) if has_business_impact else None,
+         g("business_impact_reason"),
          g("case_owner"), g("arr_currency")))
 
 # ─── Text similarity ──────────────────────────────────────────────────────────
@@ -1006,7 +1015,8 @@ async def import_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         def g(field):
             col = col_map.get(field)
             return rec.get(col, "").strip() if col else ""
-        insert_rfe_pull(cur, run_id, g, pulled_at)
+        insert_rfe_pull(cur, run_id, g, pulled_at,
+                        has_business_impact=bool(col_map.get("business_impact")))
     cur.execute("INSERT OR REPLACE INTO run_meta (run_id,started_at,rfe_count,status,source) VALUES (?,?,?,'imported','csv')",
                 (run_id, pulled_at, len(records)))
     conn.commit()
@@ -2282,7 +2292,8 @@ async def api_report_upload(kind: str, background: BackgroundTasks,
         def g(field):
             col = col_map.get(field)
             return (rec.get(col) or "").strip() if col else ""
-        insert_rfe_pull(cur, run_id, g, now)
+        insert_rfe_pull(cur, run_id, g, now,
+                        has_business_impact=bool(col_map.get("business_impact")))
 
     # Same domain inference the shared import does, so grouping behaves alike.
     for br in cur.execute("SELECT id, subject, description FROM rfe_pulls "
