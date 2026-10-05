@@ -783,6 +783,54 @@ escalations. At eight themes and six escalations it measured exactly 1.00 of an
 A4 page, with no allowance for print rendering differing from screen; at seven
 and five it uses 0.92. Domain sheets use 0.41–0.78.
 
+## 7e. Filters are per section
+
+Review of 7d in the platform: "if I filter in one domain (e.g. EPP or Executive
+overview) it affects the others. It should not be."
+
+### Why it leaked
+
+There was one filter state for the whole report. 7d moved the bar *element* into
+whichever section was showing, but every section still read the same state — so
+filtering EPP hid EPP's cards, and the Executive Overview, which aggregated every
+visible card on the page, lost them too. A filter set in one place silently
+rewrote numbers somewhere the reader was not looking.
+
+### The model now
+
+* **Every section owns its state** — each domain and the Executive Overview.
+  `SECTION_STATES[key]` is created on first use; `FILTER_STATE` is a reference to
+  the active section's object, so the bar edits that section and nothing else.
+* **Switching sections restores that section's filters** — `switchFilterSection`
+  points the bar at the new state and `syncControlBar` makes every control show
+  it, without rebuilding the bar.
+* **Each section's cards are filtered by that section's state.** Hidden sections
+  keep theirs.
+* **The Executive Overview computes from its own filters over every request**
+  (`execFacts`), never from which cards the domains happen to be hiding — that
+  was the path the leak travelled.
+* **Clear filters clears the section on screen only.**
+* **Sidebar counts** show each domain under its own filters, so a badge changes
+  only when its own domain is filtered.
+* **The bar's count is the section's alone** — "Showing 2 of 55 in EPP". The
+  report-wide figure that 7d added beside it is gone: with per-section filters it
+  would describe a filter nobody set.
+
+### Verified
+
+On a 287-request production upload, every one of 14 filter combinations was
+applied to each of 10 sections in turn — **2,954 assertions, zero failures**:
+that section's KPIs, distinct ARR, visible cards, sidebar badge and charts match
+a recomputation done independently in the test, and **every other section stays
+at its unfiltered baseline in all 140 runs.** A scripted walk-through confirmed
+the behaviour a reader sees: filter EPP to *Flagged only* (EPP 55 → 2, overview
+untouched at 287), filter the overview to Critical + High (overview → 36, EPP
+still 2), return to EPP (bar restores *Flagged only*), clear EPP (EPP → 55,
+overview still filtered).
+
+The PI Planning report is unchanged by this: its bar sits in the page header
+above the tabs, so one filter across all tabs is what its placement promises.
+
 ## 8. Known gaps
 
 1. **SOQL ingest does not capture Business Impact** (§2.2). A report built from

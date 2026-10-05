@@ -193,14 +193,36 @@ FILTER_JS = r"""
      data-cust    distinct customers asking for this card's theme
      data-days    age in days, or '' when the date was unreadable
      data-score   PI Priority 0-100
-   and onto each group (theme) container, aggregated the same way. */
-const FILTER_STATE = {
-  sort: 'priority',
-  sev: new Set(['critical', 'high', 'medium', 'low', '']),
-  bi: 'any', arr: 'any', rep: 'any', tf: 'all'
-};
+   and onto each group (theme) container, aggregated the same way.
 
+   PER-SECTION STATE. With cfg.perSection, every section — each domain and the
+   Executive Overview — keeps its OWN filters. Review of the first version found
+   that filtering EPP changed the Executive Overview and every other domain,
+   because there was one state for the whole report: a filter applied in one
+   place silently rewrote numbers somewhere the reader was not looking. Now the
+   control bar edits the state of the section on screen, each section's cards
+   are filtered by that section's state, and switching sections restores what
+   that section was set to. */
+const SEV_ALL = ['critical', 'high', 'medium', 'low', ''];
 const TF_DAYS = {all: null, '12': 365, '6': 182, '3': 91};
+
+function defaultFilterState() {
+  return {sort: 'priority', sev: new Set(SEV_ALL), bi: 'any', arr: 'any',
+          rep: 'any', tf: 'all'};
+}
+
+const SECTION_STATES = {};
+
+/** The filter state belonging to one section, created on first use. */
+function stateFor(key) {
+  if (!SECTION_STATES[key]) SECTION_STATES[key] = defaultFilterState();
+  return SECTION_STATES[key];
+}
+
+/* The state the control bar is editing: the active section's, when per-section.
+   It is the same object as SECTION_STATES[active], so editing it edits that
+   section and nothing else. */
+let FILTER_STATE = defaultFilterState();
 
 function _num(el, name, dflt) {
   const v = el.getAttribute(name);
@@ -209,9 +231,9 @@ function _num(el, name, dflt) {
   return isNaN(n) ? dflt : n;
 }
 
-/** Does one request card pass the current filters? */
-function cardPasses(el) {
-  const st = FILTER_STATE;
+/** Does one request card pass a given state? (Defaults to the bar's.) */
+function cardPasses(el, st) {
+  st = st || FILTER_STATE;
   if (!st.sev.has(el.getAttribute('data-sev') || '')) return false;
   const flagged = el.getAttribute('data-bi') === '1';
   if (st.bi === 'flagged' && !flagged) return false;
@@ -265,18 +287,16 @@ function cardOrder(kind) {
   };
 }
 
-/** Apply filters and sort order to every group on the page. */
-function applyFilters(cfg) {
-  if (!cfg) return;
-  const groups = Array.from(document.querySelectorAll(cfg.groupSel));
+/** Filter and order one section's cards by that section's own state. */
+function _applyToSection(sec, st, cfg) {
+  const groups = Array.from(sec.querySelectorAll(cfg.groupSel));
   let shown = 0, total = 0;
-
   groups.forEach(group => {
     const cards = Array.from(group.querySelectorAll(cfg.rowSel));
     let any = false;
     cards.forEach(card => {
       total++;
-      const ok = cardPasses(card);
+      const ok = cardPasses(card, st);
       card.classList.toggle('filtered-out', !ok);
       if (ok) { any = true; shown++; }
     });
@@ -284,29 +304,22 @@ function applyFilters(cfg) {
     const parent = cards.length ? cards[0].parentElement : null;
     if (parent) {
       cards.filter(c => !c.classList.contains('filtered-out'))
-           .sort(cardOrder(FILTER_STATE.sort))
+           .sort(cardOrder(st.sort))
            .forEach(c => parent.appendChild(c));
     }
   });
-
-  // Order the groups themselves within whatever contains them.
-  const bySection = new Map();
+  const byParent = new Map();
   groups.filter(g => !g.classList.contains('filtered-out')).forEach(g => {
     const p = g.parentElement;
-    if (!bySection.has(p)) bySection.set(p, []);
-    bySection.get(p).push(g);
+    if (!byParent.has(p)) byParent.set(p, []);
+    byParent.get(p).push(g);
   });
-  bySection.forEach((gs, parent) => {
-    gs.sort(cardOrder(FILTER_STATE.sort)).forEach(g => parent.appendChild(g));
-  });
+  byParent.forEach((gs, p) => gs.sort(cardOrder(st.sort)).forEach(g => p.appendChild(g)));
 
-  // Tell each section whether anything is left in it.
-  document.querySelectorAll(cfg.sectionSel).forEach(sec => {
-    // A section that holds no request cards at all is not a request section —
-    // the Executive Overview is KPIs and charts. Without this it reported
-    // "No request in this section matches the current filters" permanently,
-    // with no filters active.
-    if (!sec.querySelectorAll(cfg.groupSel).length) return;
+  // A section holding no request cards at all is not a request section — the
+  // Executive Overview is KPIs and charts. Without this it reported "No request
+  // in this section matches the current filters" permanently.
+  if (groups.length) {
     const visible = sec.querySelectorAll(cfg.groupSel + ':not(.filtered-out)').length;
     let note = sec.querySelector('.no-match-note');
     if (!visible) {
@@ -315,11 +328,26 @@ function applyFilters(cfg) {
         note.className = 'no-match-note';
         sec.appendChild(note);
       }
-      note.textContent = noMatchReason(cfg);
+      note.textContent = noMatchReason(cfg, st, sec);
       note.classList.remove('filtered-out');
     } else if (note) {
       note.classList.add('filtered-out');
     }
+  }
+  return {shown, total};
+}
+
+/** Apply filters to every section, each by its own state. */
+function applyFilters(cfg) {
+  if (!cfg) return;
+  const activeKey = cfg.activeKey ? cfg.activeKey() : null;
+  let shown = 0, total = 0;
+  document.querySelectorAll(cfg.sectionSel).forEach(sec => {
+    const key = cfg.sectionKey ? cfg.sectionKey(sec) : null;
+    const st = (cfg.perSection && key) ? stateFor(key) : FILTER_STATE;
+    const r = _applyToSection(sec, st, cfg);
+    // The bar's count describes the section on screen, not the whole report.
+    if (!cfg.perSection || key === activeKey) { shown += r.shown; total += r.total; }
   });
 
   const status = document.getElementById('ctl-count');
@@ -329,7 +357,7 @@ function applyFilters(cfg) {
       : 'Showing <strong>' + shown + '</strong> of ' + total + ' requests';
   }
   const clear = document.getElementById('ctl-clear');
-  if (clear) clear.style.display = filtersAreActive() ? '' : 'none';
+  if (clear) clear.style.display = filtersAreActive(FILTER_STATE) ? '' : 'none';
 
   // Everything else the filters drive — KPI tiles, charts, tables — is redrawn
   // by the page, which knows its own layout. The engine only knows the cards.
@@ -341,8 +369,9 @@ function applyFilters(cfg) {
  *  "0 of 41" on Flagged only looked like a broken filter during review, when in
  *  fact that export had no flagged requests at all. When the cause is a property
  *  of the data rather than of the filter, the note says so. */
-function noMatchReason(cfg) {
-  if (FILTER_STATE.bi === 'flagged') {
+function noMatchReason(cfg, st, sec) {
+  st = st || FILTER_STATE;
+  if (st.bi === 'flagged') {
     if (cfg.biAvailable === false) {
       return 'This export has no Business Impact column, so no request can be ' +
              'shown as flagged. Add the column to the Salesforce report and re-upload.';
@@ -351,21 +380,26 @@ function noMatchReason(cfg) {
       return 'No request in this export carries a business-impact flag. The column ' +
              'is there; nobody set it on any of these requests.';
     }
+    if (sec && !sec.querySelector(cfg.rowSel + '[data-bi="1"]')) {
+      return 'No request in this domain carries a business-impact flag. Other ' +
+             'domains in this report do.';
+    }
   }
   return 'No request in this section matches the current filters. ' +
          'Clear or widen them to see what is here.';
 }
 
-function filtersAreActive() {
-  const st = FILTER_STATE;
-  return st.sev.size !== 5 || st.bi !== 'any' || st.arr !== 'any'
+function filtersAreActive(st) {
+  st = st || FILTER_STATE;
+  return st.sev.size !== SEV_ALL.length || st.bi !== 'any' || st.arr !== 'any'
       || st.rep !== 'any' || st.tf !== 'all';
 }
 
-/** Build the control bar. `cfg` carries this report's selectors. */
+/** Build the control bar, showing the values of the state it edits. */
 function renderControlBar(hostId, cfg) {
   const host = document.getElementById(hostId);
   if (!host) return;
+  const st = FILTER_STATE;
   const sel = (id, opts, cur) =>
     '<select id="' + id + '" onchange="onFilterChange(&quot;' + id + '&quot;, this.value)">' +
     opts.map(o => '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' +
@@ -373,7 +407,8 @@ function renderControlBar(hostId, cfg) {
 
   const sevChips = [['critical', 'Critical'], ['high', 'High'], ['medium', 'Medium'],
                     ['low', 'Low'], ['', 'Unset']].map(function (kv) {
-    return '<span class="fchip s-' + (kv[0] || 'unset') + ' on" data-sev-key="' + kv[0] +
+    return '<span class="fchip s-' + (kv[0] || 'unset') + (st.sev.has(kv[0]) ? ' on' : '') +
+      '" data-sev-key="' + kv[0] +
       '" onclick="onSevToggle(&quot;' + kv[0] + '&quot;)">' + kv[1] + '</span>';
   }).join('');
 
@@ -382,29 +417,48 @@ function renderControlBar(hostId, cfg) {
       sel('w-sort', [['priority', 'PI Priority'], ['severity', 'Severity'],
                      ['arr', 'ARR at stake'], ['impact', 'Business impact'],
                      ['repetition', 'Repetition'], ['recency', 'Most recent'],
-                     ['oldest', 'Oldest']], 'priority') + '</div>' +
+                     ['oldest', 'Oldest']], st.sort) + '</div>' +
     '<div class="ctl"><label>Severity</label><div class="chip-row">' + sevChips + '</div></div>' +
     '<div class="ctl"><label for="w-bi">Business impact</label>' +
       (cfg.biAvailable === false
         ? '<select id="w-bi" disabled title="This export has no Business Impact column">' +
           '<option>Not in this export</option></select>'
         : sel('w-bi', [['any', 'Any'], ['flagged', 'Flagged only'],
-                       ['unflagged', 'Not flagged']], 'any')) + '</div>' +
+                       ['unflagged', 'Not flagged']], st.bi)) + '</div>' +
     '<div class="ctl"><label for="w-arr">ARR</label>' +
       sel('w-arr', [['any', 'Any'], ['high', '$1M and above'], ['mid', '$250K &ndash; $1M'],
-                    ['low', 'Under $250K'], ['none', 'No ARR recorded']], 'any') + '</div>' +
+                    ['low', 'Under $250K'], ['none', 'No ARR recorded']], st.arr) + '</div>' +
     '<div class="ctl"><label for="w-rep">Repetition</label>' +
       sel('w-rep', [['any', 'Any'], ['multi', '2+ customers'], ['three', '3+ customers'],
-                    ['single', 'Single customer']], 'any') + '</div>' +
+                    ['single', 'Single customer']], st.rep) + '</div>' +
     '<div class="ctl"><label for="w-tf">Timeframe</label>' +
       sel('w-tf', [['all', 'All time'], ['12', 'Last 12 months'],
-                   ['6', 'Last 6 months'], ['3', 'Last 3 months']], 'all') + '</div>' +
+                   ['6', 'Last 6 months'], ['3', 'Last 3 months']], st.tf) + '</div>' +
     '<div id="ctl-status"><span id="ctl-count"></span>' +
       '<button class="linkish" id="ctl-clear" style="display:none" ' +
       'onclick="clearFilters()">Clear filters</button></div>';
 
   window._filterCfg = cfg;
   applyFilters(cfg);
+}
+
+/** Make the bar show the state it now edits, without rebuilding it. */
+function syncControlBar() {
+  const st = FILTER_STATE;
+  const set = (id, v) => { const el = document.getElementById(id); if (el && !el.disabled) el.value = v; };
+  set('w-sort', st.sort); set('w-bi', st.bi); set('w-arr', st.arr);
+  set('w-rep', st.rep); set('w-tf', st.tf);
+  document.querySelectorAll('#ctl-bar .fchip').forEach(c => {
+    c.classList.toggle('on', st.sev.has(c.getAttribute('data-sev-key')));
+  });
+  const clear = document.getElementById('ctl-clear');
+  if (clear) clear.style.display = filtersAreActive(st) ? '' : 'none';
+}
+
+/** Point the bar at a section's own state — called when the section changes. */
+function switchFilterSection(key) {
+  FILTER_STATE = stateFor(key);
+  syncControlBar();
 }
 
 function onFilterChange(id, value) {
@@ -420,21 +474,16 @@ function onSevToggle(key) {
   } else {
     st.sev.add(key);
   }
-  document.querySelectorAll('#ctl-bar .fchip').forEach(c => {
-    c.classList.toggle('on', st.sev.has(c.getAttribute('data-sev-key')));
-  });
+  syncControlBar();
   applyFilters(window._filterCfg);
 }
 
+/** Clear the filters of the section on screen — and only that section. */
 function clearFilters() {
-  FILTER_STATE.sev = new Set(['critical', 'high', 'medium', 'low', '']);
-  FILTER_STATE.bi = 'any'; FILTER_STATE.arr = 'any';
-  FILTER_STATE.rep = 'any'; FILTER_STATE.tf = 'all';
-  ['w-bi', 'w-arr', 'w-rep', 'w-tf'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = (id === 'w-tf') ? 'all' : 'any';
-  });
-  document.querySelectorAll('#ctl-bar .fchip').forEach(c => c.classList.add('on'));
+  const d = defaultFilterState();
+  FILTER_STATE.sev = d.sev; FILTER_STATE.bi = d.bi; FILTER_STATE.arr = d.arr;
+  FILTER_STATE.rep = d.rep; FILTER_STATE.tf = d.tf;
+  syncControlBar();
   applyFilters(window._filterCfg);
 }
 """

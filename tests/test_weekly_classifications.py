@@ -266,7 +266,11 @@ def test_a_section_without_request_cards_is_left_alone(html):
     """The Executive Overview holds KPIs and charts, not request cards. It was
     permanently reporting "No request in this section matches the current
     filters" with no filters active."""
-    assert "if (!sec.querySelectorAll(cfg.groupSel).length) return;" in html
+    body = html[html.index("function _applyToSection("):]
+    body = body[:body.index("\nfunction applyFilters(")]
+    # The no-match note is only ever written inside this guard.
+    assert "if (groups.length) {" in body
+    assert body.index("if (groups.length) {") < body.index("no-match-note")
 
 
 # ── v2.8: filters drive everything below them ───────────────────────────────
@@ -397,3 +401,34 @@ def test_chart_text_escaper_is_shared(html):
     assert report_ui.CHART_TEXT_JS in html
     from scoring import pi_report_assets as A
     assert report_ui.CHART_TEXT_JS in A.JS
+
+
+# ── Filters are per section ─────────────────────────────────────────────────
+
+def test_each_section_keeps_its_own_filter_state(html):
+    """Filtering EPP used to change the Executive Overview and every other
+    domain: one state served the whole report."""
+    assert "function stateFor(" in html
+    assert "perSection: true" in html
+    assert "switchFilterSection(id)" in html
+
+
+def test_overview_computes_from_its_own_filters_not_the_domains(html):
+    """The Executive Overview must not read which cards the domains are
+    hiding — that is the path the leak travelled."""
+    assert "function execFacts()" in html
+    assert "cardPasses(el, st)" in html
+    assert "var mine = scope === 'all' ? exec : sectionFacts(scope);" in html
+
+
+def test_clear_resets_the_section_on_screen_only(html):
+    body = html[html.index("function clearFilters()"):]
+    body = body[:body.index("\n}\n")]
+    assert "FILTER_STATE.sev = d.sev" in body          # mutates the active section's object
+    assert "SECTION_STATES" not in body                # never touches the others
+
+
+def test_domain_count_no_longer_quotes_a_report_wide_filter(html):
+    """With per-section filters, a report-wide number beside a domain's count
+    would describe a filter nobody set."""
+    assert "in the report'" not in html

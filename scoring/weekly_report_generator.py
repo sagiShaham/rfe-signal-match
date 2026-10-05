@@ -1658,22 +1658,35 @@ function exportDomainPdf(sid) {{
    bubble chart and the at-risk tables. One implementation each, so a panel
    cannot disagree with the cards beneath it. ARR counts every account once. */
 
-function visibleFacts() {{
+function factOf(el) {{
+  var d = el.getAttribute('data-days');
+  return {{
+    el: el,
+    caseNum: el.getAttribute('data-case') || '',
+    acct: el.getAttribute('data-acct') || '',
+    arr: Number(el.getAttribute('data-arr')) || 0,
+    sev: el.getAttribute('data-sev') || '',
+    bi: el.getAttribute('data-bi') === '1',
+    days: (d === null || d === '') ? null : Number(d),
+    score: Number(el.getAttribute('data-score')) || 0,
+    section: el.getAttribute('data-section') || '',
+    theme: el.closest('.request-card')
+  }};
+}}
+
+/** A domain's requests, as that domain's own filters leave them. */
+function sectionFacts(sid) {{
   return Array.prototype.map.call(
-    document.querySelectorAll('.rfe-card:not(.filtered-out)'), function (el) {{
-      var d = el.getAttribute('data-days');
-      return {{
-        el: el,
-        caseNum: el.getAttribute('data-case') || '',
-        acct: el.getAttribute('data-acct') || '',
-        arr: Number(el.getAttribute('data-arr')) || 0,
-        sev: el.getAttribute('data-sev') || '',
-        bi: el.getAttribute('data-bi') === '1',
-        days: (d === null || d === '') ? null : Number(d),
-        score: Number(el.getAttribute('data-score')) || 0,
-        section: el.getAttribute('data-section') || ''
-      }};
-    }});
+    document.querySelectorAll('#section-' + sid + ' .rfe-card:not(.filtered-out)'), factOf);
+}}
+
+/** The Executive Overview's requests: every request in the report, put through
+ *  the Executive Overview's OWN filters. It must not read the domains' visible
+ *  cards — that is what made a filter set in EPP change the overview. */
+function execFacts() {{
+  var st = stateFor('exec');
+  return Array.prototype.filter.call(document.querySelectorAll('.rfe-card'),
+    function (el) {{ return cardPasses(el, st); }}).map(factOf);
 }}
 
 /** ARR at stake: each account counted once, at its largest recorded value. */
@@ -1733,8 +1746,9 @@ function renderKpis(el, facts, scope) {{
 function renderDomainCards(el, facts) {{
   el.innerHTML = CHART.section_order.map(function (sid) {{
     var mine = facts.filter(function (f) {{ return f.section === sid; }});
-    var themes = document.querySelectorAll(
-      '#section-' + sid + ' .request-card:not(.filtered-out)').length;
+    var themeSet = [];
+    mine.forEach(function (f) {{ if (f.theme && themeSet.indexOf(f.theme) < 0) themeSet.push(f.theme); }});
+    var themes = themeSet.length;
     var top = mine.slice().sort(function (a, b) {{ return b.score - a.score; }})[0];
     // &#39; rather than a backslash-escaped quote: inside this Python f-string the
     // backslash is consumed before the page sees it, which left two adjacent
@@ -1770,7 +1784,7 @@ function renderRisk(el, facts, scope) {{
     .sort(function (a, b) {{ return (b.arr - a.arr) || (b.items.length - a.items.length); }})
     .slice(0, 10);
   if (!rows.length) {{
-    el.innerHTML = '<div class="muted">' + (filtersAreActive()
+    el.innerHTML = '<div class="muted">' + (filtersAreActive(stateFor(scope === 'all' ? 'exec' : scope))
       ? 'No at-risk account matches the current filters.'
       : (scope === 'all' ? 'No at-risk accounts in this report.'
                          : 'No at-risk accounts in this domain.')) + '</div>';
@@ -1850,33 +1864,35 @@ function renderBubble(sid) {{
   }}), CFG);
 }}
 
-function renderNavBadges(facts) {{
+function renderNavBadges() {{
+  // Each domain's count under that domain's own filters — so a badge changes
+  // only when its own domain is filtered.
   CHART.section_order.forEach(function (sid) {{
     var b = document.querySelector('#nav-' + sid + ' .nav-badge');
-    if (b) b.textContent = facts.filter(function (f) {{ return f.section === sid; }}).length;
+    if (b) b.textContent = sectionFacts(sid).length;
   }});
 }}
 
 /** The bar's count, in the terms of the section on screen. Inside EPP it used
  *  to read "287 requests in scope" — the whole report — beside 55 EPP cards. */
-function renderScopeStatus(sid, facts) {{
+function renderScopeStatus(sid) {{
   var el = document.getElementById('ctl-count');
   if (!el) return;
-  var total = document.querySelectorAll('.rfe-card').length;
+  var st = stateFor(sid);
   if (sid === 'exec') {{
-    el.innerHTML = filtersAreActive()
-      ? 'Showing <strong>' + facts.length + '</strong> of ' + total + ' requests'
+    var total = document.querySelectorAll('.rfe-card').length;
+    el.innerHTML = filtersAreActive(st)
+      ? 'Showing <strong>' + execFacts().length + '</strong> of ' + total + ' requests'
       : '<strong>' + total + '</strong> requests in scope';
     return;
   }}
+  // Filters are per section now, so a report-wide number beside a domain's
+  // count would describe a filter nobody set. The count is the domain's alone.
   var name = escJs(CHART.section_names[sid] || sid);
   var inSec = document.querySelectorAll('#section-' + sid + ' .rfe-card').length;
-  var shownSec = facts.filter(function (f) {{ return f.section === sid; }}).length;
-  el.innerHTML = filtersAreActive()
-    ? 'Showing <strong>' + shownSec + '</strong> of ' + inSec + ' in ' + name +
-      ' &middot; ' + facts.length + ' of ' + total + ' in the report'
-    : '<strong>' + inSec + '</strong> requests in ' + name +
-      ' &middot; ' + total + ' in the report';
+  el.innerHTML = filtersAreActive(st)
+    ? 'Showing <strong>' + sectionFacts(sid).length + '</strong> of ' + inSec + ' in ' + name
+    : '<strong>' + inSec + '</strong> requests in ' + name;
 }}
 
 function activeSectionId() {{
@@ -1885,21 +1901,20 @@ function activeSectionId() {{
 }}
 
 function renderLive() {{
-  var facts = visibleFacts();
+  var exec = execFacts();
   document.querySelectorAll('.live[data-live]').forEach(function (el) {{
     var scope = el.getAttribute('data-scope');
-    var mine = scope === 'all' ? facts
-             : facts.filter(function (f) {{ return f.section === scope; }});
+    var mine = scope === 'all' ? exec : sectionFacts(scope);
     var kind = el.getAttribute('data-live');
     if (kind === 'kpis') renderKpis(el, mine, scope);
     else if (kind === 'risk') renderRisk(el, mine, scope);
     else if (kind === 'domains') renderDomainCards(el, mine);
   }});
-  renderNavBadges(facts);
+  renderNavBadges();
   var sid = activeSectionId();
-  renderScopeStatus(sid, facts);
+  renderScopeStatus(sid);
   // Charts are only drawn into a visible section — Plotly sizes to its box.
-  if (sid === 'exec') renderExecCharts(facts); else renderBubble(sid);
+  if (sid === 'exec') renderExecCharts(exec); else renderBubble(sid);
 }}
 
 /** One control bar, moved into whichever section is showing, under its
@@ -1914,18 +1929,26 @@ document.addEventListener('DOMContentLoaded', function () {{
   initTips();
   // The bubble chart is now drawn from the filtered clusters by renderLive.
   drawBubble = function () {{}};
+  var cfg = {{
+    sectionSel: '.section-page', groupSel: '.request-card', rowSel: '.rfe-card',
+    biAvailable: CHART.bi_available,
+    // Every section keeps its own filters: EPP's filter never touches SIEM or
+    // the Executive Overview, and each one is restored on return.
+    perSection: true,
+    sectionKey: function (sec) {{ return sec.id.replace('section-', ''); }},
+    activeKey: activeSectionId,
+    afterApply: renderLive
+  }};
   var baseShow = showSection;
   showSection = function (id) {{
     baseShow(id);
+    switchFilterSection(id);
     mountFilterBar(id);
-    renderLive();
+    applyFilters(cfg);
   }};
+  switchFilterSection('exec');
   mountFilterBar('exec');
-  renderControlBar('ctl-bar', {{
-    sectionSel: '.section-page', groupSel: '.request-card', rowSel: '.rfe-card',
-    biAvailable: CHART.bi_available,
-    afterApply: renderLive
-  }});
+  renderControlBar('ctl-bar', cfg);
 }});
 
 var CHART = {json.dumps(chart_data)};
